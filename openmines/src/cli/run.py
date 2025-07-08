@@ -38,7 +38,7 @@ project_root = os.path.abspath(os.path.join(current_dir, '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-def load_config(filename): # 将文件内容以字典形式读取并返回
+def load_config(filename):
     # if Dict just return
     if isinstance(filename, dict):
         return filename
@@ -49,10 +49,9 @@ def run_dispatch_sim(dispatcher: BaseDispatcher, config_file):
     config = load_config(config_file)
     # log_path 为cwd下的logs文件夹
     log_path = pathlib.Path.cwd() / 'logs'
-    # 初始化矿山，矿山变量里包含矿山、卡车、装载点、卸载点、道路、调度器等，将其全部加入到mine、Truck等对象的变量里去
     # 初始化矿山
     mine = Mine(config['mine']['name'], log_path=log_path)
-    mine.add_dispatcher(dispatcher) # 添加当前调度算法到矿山变量里去
+    mine.add_dispatcher(dispatcher)
     # 初始化充电站和卡车
     charging_site = ChargingSite(config['charging_site']['name'], position=config['charging_site']['position'])
     for truck_config in config['charging_site']['trucks']:
@@ -109,20 +108,19 @@ def run_dispatch_sim(dispatcher: BaseDispatcher, config_file):
 
     # 开始实验
     print(f"Running simulation for {dispatcher.__class__.__name__}")
-    ticks = mine.start(total_time=config['sim_time']) # 当前只有通用的start启动，没有start_rl启动？
-    return ticks # 返回一个字典，key为时间，value为一个字典，包含了模拟过程中每个时间点状态的数据集合；通过mine中的dump_frames()方法生成
+    ticks = mine.start(total_time=config['sim_time'])
+    return ticks
 
 
 def run_simulation(config_file=None):
-    config = load_config(config_file) # 将文件内容以字典形式读取并返回
-    charter = Charter(config_file) # 自动化生成一系列文件的保存路径（图表等）
-    states_dict = dict() 
+    config = load_config(config_file)
+    charter = Charter(config_file)
+    states_dict = dict()
     
     # 初始化调度器
     dispatchers_package = 'openmines.src.dispatch_algorithms'
     dispatchers_list = []
     
-    # 以下这么多操作都是在尝试导入调度算法的包
     # 在导入之前添加调试信息
     dispatcher_type = config['dispatcher']['type'][0]  # 假设至少有一个调度器
     print(f"Trying to import dispatcher: {dispatcher_type}")
@@ -130,9 +128,9 @@ def run_simulation(config_file=None):
     # 检查模块是否存在
     try:
         import inflection
-        module_name_guess = inflection.underscore(dispatcher_type) # 把conf文件中的调度算法名称加个—_
-        module_path = f"openmines.src.dispatch_algorithms.{module_name_guess}" # 得到调度算法的模块路径
-        spec = importlib.util.find_spec(module_path) # 尝试导入模块
+        module_name_guess = inflection.underscore(dispatcher_type)
+        module_path = f"openmines.src.dispatch_algorithms.{module_name_guess}"
+        spec = importlib.util.find_spec(module_path)
         if spec:
             print(f"Module {module_path} path: {spec.origin}")
         else:
@@ -240,11 +238,11 @@ def run_simulation(config_file=None):
         print(f"Error: No dispatchers found for types: {', '.join(dispatcher_types)}")
         sys.exit(1)
 
-    # 终于找到调度器的包了，开始运行对比实验
+    # 开始运行对比实验
     for dispatcher in dispatchers_list:
         dispatcher_name = dispatcher.name
         # RUN SIMULATION
-        ticks = run_dispatch_sim(dispatcher, config_file) #返回ticks，一个时间序列的数据集合，后面给可视化出来
+        ticks = run_dispatch_sim(dispatcher, config_file)
         # 读取运行结果并保存，等待绘图
         ## 读取production
         times = []
@@ -252,7 +250,6 @@ def run_simulation(config_file=None):
         service_count_list = []
         waiting_truck_count_list = []
         # ticks 是一个字典 key为时间，value为一个字典，包含了当前时间的所有信息
-        # 以下代码为把该算法的各种数据存储在对应的外部变量里
         for tick in ticks.values():
             if 'mine_states' not in tick:
                 continue
@@ -711,7 +708,7 @@ Analysis Usage:
 
 
 if __name__ == "__main__":
-    config_path = sys.argv[1] # argv[0]是命令行运行的文件名，此处为run.py,setup.py文件里有定义;argv[1]是第一个参数
+    config_path = sys.argv[1]
     run_simulation(config_file=config_path)
 
 

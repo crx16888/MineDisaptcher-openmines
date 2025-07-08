@@ -54,6 +54,7 @@ class PureLLMDispatcher(BaseDispatcher):
         self.order_history = []
         self.np_random = np.random.RandomState()  # 创建NumPy的随机状态对象
 
+# 这里的prompt需要修改，让llm返回的json文件符合本仓库的json格式，才能被系统正确解析和执行
     def give_init_order(self, truck: "Truck", mine: "Mine") -> int:
         # logger
         self.logger = mine.global_logger.get_logger("PureLLMDispatcher")
@@ -398,8 +399,8 @@ class PureLLMDispatcher(BaseDispatcher):
 
 class OPENAI:
     def __init__(self, model_name="deepseek-chat"):
-        self.api_key = "YOUR API KEY"  # token
-        self.api_base = "OPENAI BASE HERE"  # you can choose custom api base, like:"https://api.qaqgpt.com/v1"
+        self.api_key = "sk-d2a64607b4a1463ab5f75ee8d5ad7e22"  # token
+        self.api_base = "https://api.deepseek.com/v1"  # you can choose custom api base, like:"https://api.qaqgpt.com/v1"
         self.model_name = model_name
         self.load_model()
 

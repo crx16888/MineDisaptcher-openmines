@@ -359,8 +359,6 @@ class Mine:
             self.env.process(load_site.parking_lot.monitor_resources(env=self.env,
                                                                     resources=[shovel.res for shovel in load_site.shovel_list],
                                                                      res_objs=load_site.shovel_list))
-            # process是启动一个进程，启动的是monitor_resources()这个监控所有铲车资源的进程
-
             for shovel in load_site.shovel_list:
                 self.env.process(load_site.parking_lot.monitor_resource(env=self.env,res_obj=shovel,
                                                                         resource=shovel.res))
@@ -388,13 +386,13 @@ class Mine:
 
         # log in the truck as process
         for truck in self.trucks:
-            self.env.process(truck.run()) # 启动卡车进程，这里已经定义了卡车使用算法等等的运行逻辑，底下env不过是启动实验进程
+            self.env.process(truck.run())
 
-        self.env.run(until=total_time) # 在运行期间，所有的监控进程已经把数据存储在了各个对象的状态属性中；dump_frames实际上是在读取和整理这些已经存储的数据
+        self.env.run(until=total_time)
         self.mine_logger.info(f"simulation finished with dispatcher {self.dispatcher.__class__.__name__}")
         self.summary()
-        ticks = self.dump_frames(total_time=total_time) # ticks返回一个字典，key为时间，value为一个字典，包含了模拟过程中每个时间点状态的数据集合；通过mine中的dump_frames()方法生成
-        return ticks # 是各种数据状态的时间序列集合，具体去看飞书关于simpy库的介绍
+        ticks = self.dump_frames(total_time=total_time)
+        return ticks
 
     def start_rl(self, obs_queue:Queue, act_queue:Queue, reward_mode:str = "dense", total_time:float=60*8, ticks:bool=False)->dict:
         """
@@ -450,11 +448,10 @@ class Mine:
         # log in the truck as process
         for truck in self.trucks:
             self.env.process(truck.run())
-        self.env.run(until=total_time)  # 在这里开一个独立的进程用于执行函数
+        self.env.run(until=total_time)  # 在这里开一个独立的进程用于执行函数，后面大妈
 
         # 当模拟结束的时候 最后发送一个ob和done等信息
-        ob = self.dispatcher.current_observation # rl需要知道最终的环境状态等信息，ob包含大量的信息，包括卡车、铲车、装载区、卸载区的状态等
-        # dispatcher.current_observation在对应的rl算法里被定义，比如rl_dispatch.py里的_get_observation()方法
+        ob = self.dispatcher.current_observation
         info = ob["info"]
         if reward_mode == "dense":
             reward = self.dispatcher._get_reward_dense(self)
@@ -478,7 +475,7 @@ class Mine:
             self.dump_frames(total_time=total_time, rl=True)
         obs_queue.put(out, timeout=5)  # 将观察值放入队列
 
-    def dump_frames(self, total_time, rl=False): # 数据被保存在JSON文件中，文件名格式为：MINE-{矿山名称}-ALGO-{调度器名称}-TIME-{时间戳}.json
+    def dump_frames(self, total_time, rl=False):
         """使用TickGenerator记录仿真过程中的数据
         将数据写入到文件中
         :return:
@@ -488,7 +485,7 @@ class Mine:
         assert self.tick_generator is not None, "tick_generator can not be None"
 
         print("dumping frames...")
-        self.tick_generator.run() # 调用tick_generator的run方法，生成数据
+        self.tick_generator.run()
 
         # 获得年月日时分秒的字符串表示
         time_str = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime())

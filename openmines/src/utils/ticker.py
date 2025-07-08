@@ -51,7 +51,7 @@ class TickGenerator:
         dump_sites = self.mine.dump_sites
         charging_site = self.mine.charging_site
         trucks = self.mine.trucks
-        jam_events = self.mine.random_event_pool.get_even_by_type("RoadEvent:jam") # 获取所有道路堵车事件
+        jam_events = self.mine.random_event_pool.get_even_by_type("RoadEvent:jam")
 
         # 遍历产生每个tick
         for tick in range(self.tick_num):

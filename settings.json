@@ -1,0 +1,17 @@
+{
+    "files.encoding": "utf8",
+    "files.autoGuessEncoding": true,
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell": {
+            "source": "PowerShell",
+            "args": ["-NoExit", "-Command", "chcp 65001"]
+        }
+    },
+    "python.defaultInterpreterPath": "D:\\Software\\Anaconda\\envs\\openmines_research\\python.exe",
+    "terminal.integrated.env.windows": {
+        "PYTHONIOENCODING": "utf-8",
+        "CONDA_NO_PLUGINS": "true"
+    },
+    "terminal.integrated.shellIntegration.enabled": true
+} 
