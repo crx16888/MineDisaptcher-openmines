@@ -193,7 +193,7 @@ class MineEnv:
         self.seed_value = seed
         self.action_space.seed(seed)
 
-    def step(self, action):
+    def step(self, action): # 此处的step是给action（action是rl_dispatch中已经计算好了），输入送给此处更新进程
         # action给进程
         self.act_queue.put(action)
         # 等待消息

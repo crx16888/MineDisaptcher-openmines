@@ -56,6 +56,8 @@ class RLDispatcher(BaseDispatcher):
         self.last_action = None
 
     def _step(self, truck: Truck, mine: Mine) -> int:
+        # 建议动作是传统的调度算法生成仅用于参考，用于对比或训练
+        # agent动作是AM模型生成的，是实际执行的动作
         """完成队列交互"""
         start_time = time.time()
         timeout = 30  # 设置总超时时间为10秒
@@ -66,6 +68,7 @@ class RLDispatcher(BaseDispatcher):
             # reward = self.last_reward  # 读取上一次的reward并进行计算
             if self.reward_mode == "dense":
                 reward = self._get_reward_dense(mine=mine, truck=self.last_truck, action=self.last_action)  # 预估当前决策的奖励，下一步作为reward返回
+                # 用的是上一步的动作
             elif self.reward_mode == "sparse":
                 reward = self._get_reward_sparse(mine=mine, truck=self.last_truck, action=self.last_action)
             else:
@@ -74,7 +77,7 @@ class RLDispatcher(BaseDispatcher):
             done = self._get_done(mine)
             truncated = False
             # suggest action
-            info["sug_action"] = self._get_dispatch_action(truck, mine)  # 根据当前观察获取建议动作
+            info["sug_action"] = self._get_dispatch_action(truck, mine)  # 根据当前观察使用指定的调度器获取建议动作
             out = {
                 "ob": self.current_observation,
                 "info": info,
@@ -122,6 +125,38 @@ class RLDispatcher(BaseDispatcher):
                 mine.mine_logger.debug(
                     f"Step execution time: {end_time - start_time:.2f} seconds. obs-lock: {self.obs_queue._rlock} act-lock: {self.act_queue._rlock}. Env time: {mine.env.now} Done: {mine.done} Truckname:{truck.name} Location: {truck.current_location.name} OBS_queue_len:{self.obs_queue}, act_queue_len: {self.act_queue}")
 
+    def _map_action_to_site_index(self, action: int, truck: Truck, mine: Mine) -> int:
+        """
+        将AM模型的节点动作映射到具体的site索引
+        AM模型的节点布局：
+        0: 充电站
+        1-5: 装载点 (对应 load_sites[0-4])  
+        6-10: 卸载点 (对应 dump_sites[0-4])
+        """
+        if isinstance(truck.current_location, ChargingSite):
+            # 从充电站出发，需要去装载点
+            if 1 <= action <= 5:
+                return action - 1  # 映射到 0-4
+            else:
+                mine.mine_logger.warning(f"Invalid action {action} for ChargingSite, using default 0")
+                return 0
+                
+        elif isinstance(truck.current_location, LoadSite):
+            # 从装载点出发，需要去卸载点
+            if 6 <= action <= 10:
+                return action - 6  # 映射到 0-4
+            else:
+                mine.mine_logger.warning(f"Invalid action {action} for LoadSite, using default 0")
+                return 0
+                
+        else:  # DumpSite
+            # 从卸载点出发，需要返回装载点
+            if 1 <= action <= 5:
+                return action - 1  # 映射到 0-4
+            else:
+                mine.mine_logger.warning(f"Invalid action {action} for DumpSite, using default 0")
+                return 0
+
     def update_order_info(self, truck: Truck, mine: Mine, action: int):
         """
         更新订单信息
@@ -140,7 +175,9 @@ class RLDispatcher(BaseDispatcher):
         :return: 装载点的索引
         """
         action = self._step(truck, mine)
-        return action
+        mapped_action = self._map_action_to_site_index(action, truck, mine)
+        mine.mine_logger.debug(f"give_init_order: raw_action={action}, mapped_action={mapped_action}")
+        return mapped_action
 
     def give_haul_order(self, truck: Truck, mine: Mine) -> int:
         """
@@ -150,7 +187,9 @@ class RLDispatcher(BaseDispatcher):
         :return: 卸载点的索引
         """
         action = self._step(truck, mine)
-        return action
+        mapped_action = self._map_action_to_site_index(action, truck, mine)
+        mine.mine_logger.debug(f"give_haul_order: raw_action={action}, mapped_action={mapped_action}")
+        return mapped_action
 
     def give_back_order(self, truck: Truck, mine: Mine) -> int:
         """
@@ -160,7 +199,9 @@ class RLDispatcher(BaseDispatcher):
         :return: 返回装载点的索引
         """
         action = self._step(truck, mine)
-        return action
+        mapped_action = self._map_action_to_site_index(action, truck, mine)
+        mine.mine_logger.debug(f"give_back_order: raw_action={action}, mapped_action={mapped_action}")
+        return mapped_action
 
     def _get_done(self, mine: Mine) -> bool:
         """done为true的时候被mine.py的start_rl触发"""
@@ -191,7 +232,8 @@ class RLDispatcher(BaseDispatcher):
             return mine.produce_tons
         return 0
 
-    def _get_reward_dense(self, mine: Mine, truck: "Truck" = None, action: int = None) -> int:
+    def _get_reward_dense(self, mine: Mine, truck: "Truck" = None, action: int = None) -> int: # 奖励函数
+        # 输入整个矿山对象、当前卡车对象、当前动作，输出奖励值
         """
         最大化产量方向的reward
         可以自定义配置
@@ -306,7 +348,7 @@ class RLDispatcher(BaseDispatcher):
             reward += 0.1 * tons_per_min  # 每分钟产量的奖励系数为0.1
 
         return reward
-    def _get_observation(self, truck: Truck, mine: Mine):
+    def _get_observation(self, truck: Truck, mine: Mine): # 输入当前卡车对象和矿山对象，输出当前卡车和整个矿山的状态值
         """
         将当前的环境状态编码为一个可传递给队列的观察值
         :param truck: 当前的卡车对象
