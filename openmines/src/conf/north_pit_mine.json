@@ -3,7 +3,7 @@
     "name": "NorthPitMine"
   },
   "dispatcher": {
-    "type": [ "PPODispatcher","ShortestTripDispatcher","AMDispatcher"]},
+    "type": [ "PPODispatcher","ShortestTripDispatcher"]},
   "charging_site": {
     "name": "NorthPitMineChargingSite",
     "position": [0, 0],

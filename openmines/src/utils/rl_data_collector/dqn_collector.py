@@ -224,7 +224,7 @@ class DataCollector:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect dispatch decision data")
     parser.add_argument("--env_config", type=str,
-                        default="../../../src/conf/north_pit_mine.json",
+                        default="C:/Users/95718/Desktop/vscode/openmines/openmines/src/conf/north_pit_mine.json",
                         help="环境配置文件路径")
     parser.add_argument("--episodes", type=int, default=10,
                         help="收集数据的回合数")

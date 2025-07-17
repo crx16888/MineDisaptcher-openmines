@@ -19,7 +19,7 @@ class PPODispatcher(BaseDispatcher):
     def __init__(self):
         super().__init__()
         self.name = "PPODispatcher"
-        self.checkpoints_dir = os.path.join(os.path.dirname(__file__), "checkpoints", "mine")
+        self.checkpoints_dir = r"C:\Users\95718\Desktop\vscode\openmines\models\PPO_models"
         self.model_path = self._find_latest_best_model()
         self.device = self._get_device()  # 获取可用设备
         self.load_rl_model(self.model_path)
@@ -31,37 +31,23 @@ class PPODispatcher(BaseDispatcher):
         if not os.path.exists(self.checkpoints_dir):
             raise FileNotFoundError(f"Checkpoints directory not found: {self.checkpoints_dir}")
         
-        # 查找所有实验目录
-        exp_dirs = [d for d in os.listdir(self.checkpoints_dir) 
-                   if os.path.isdir(os.path.join(self.checkpoints_dir, d))]
+        # 在指定目录中直接查找最佳模型文件
+        model_files = [f for f in os.listdir(self.checkpoints_dir) 
+                      if f.startswith('best_model_') and f.endswith('.pt')]
         
-        if not exp_dirs:
-            raise FileNotFoundError(f"No experiment directories found in: {self.checkpoints_dir}")
+        if not model_files:
+            raise FileNotFoundError(f"No best model files found in: {self.checkpoints_dir}")
         
-        # 按修改时间排序，选择最新的实验目录
-        exp_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(self.checkpoints_dir, x)), reverse=True)
+        # 按文件名排序（通常包含步数或时间戳），选择最新的最佳模型
+        model_files.sort(reverse=True)
+        latest_model_file = model_files[0]
+        model_path = os.path.join(self.checkpoints_dir, latest_model_file)
         
-        # 尝试找到包含最佳模型的最新实验目录
-        for exp_dir in exp_dirs:
-            latest_exp_dir = os.path.join(self.checkpoints_dir, exp_dir)
-            
-            # 在实验目录中查找最佳模型文件
-            model_files = [f for f in os.listdir(latest_exp_dir) 
-                          if f.startswith('best_model_') and f.endswith('.pt')]
-            
-            if model_files:
-                # 按文件名排序，选择最新的最佳模型
-                model_files.sort(reverse=True)
-                model_path = os.path.join(latest_exp_dir, model_files[0])
-                
-                print(f"自动找到最佳模型:")
-                print(f"  实验目录: {exp_dir}")
-                print(f"  模型文件: {model_files[0]}")
-                print(f"  完整路径: {model_path}")
-                return model_path
-        
-        # 如果没有找到最佳模型，抛出异常
-        raise FileNotFoundError(f"No best model files found in any experiment directory in: {self.checkpoints_dir}")
+        print(f"自动找到最佳模型:")
+        print(f"  模型目录: {self.checkpoints_dir}")
+        print(f"  模型文件: {latest_model_file}")
+        print(f"  完整路径: {model_path}")
+        return model_path
         
     def _get_device(self):
         """
