@@ -16,14 +16,19 @@ from openmines.src.truck import Truck
 from openmines.src.dispatch_algorithms.rl_dispatch import RLDispatcher
 
 class PPODispatcher(BaseDispatcher):
-    def __init__(self):
+    def __init__(self, model_path: Optional[str] = None):
         super().__init__()
         self.name = "PPODispatcher"
-        self.checkpoints_dir = r"C:\Users\95718\Desktop\vscode\openmines\models\PPO_models"
-        self.model_path = self._find_latest_best_model()
-        self.device = self._get_device()  # 获取可用设备
+        self.checkpoints_dir = r"C:/Users/95718/Desktop/vscode/openmines/models/PPO_models"
+        self.device = self._get_device()
+        
+        if model_path is not None:
+            self.model_path = model_path
+        else:
+            self.model_path = self._find_latest_best_model()
+
         self.load_rl_model(self.model_path)
-        self.rl_dispatcher_helper = RLDispatcher("NaiveDispatcher", reward_mode="dense")        
+        self.rl_dispatcher_helper = RLDispatcher("NaiveDispatcher", reward_mode="dense")
         self.max_sim_time = 240
     
     def _find_latest_best_model(self):
@@ -57,25 +62,33 @@ class PPODispatcher(BaseDispatcher):
             return torch.device("cuda")
         else:
             return torch.device("cpu")
-        
+
     def load_rl_model(self, model_path: str):
-        """
-        Load an model for inference.
-        """
+        import __main__
+        import openmines.test.cleanrl.ppo_single_net
+
+        __main__.Args = openmines.test.cleanrl.ppo_single_net.Args
+
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-        from openmines.test.cleanrl.ppo_single_net import Agent, Args
-        
+
+        Args = __main__.Args
+        Agent = openmines.test.cleanrl.ppo_single_net.Agent
+
         self.args = Args()
+        # 确保 Agent 初始化时加载归一化参数
         self.agent = Agent(envs=-1, args=self.args, 
                          norm_path=os.path.join(os.path.dirname(__file__), "ppo_norm_params_dense.json"))
+
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+        # 从 checkpoint 中提取真正的模型权重
+        model_state_dict = checkpoint.get("model_state_dict", checkpoint)
         
-        # 加载模型时指定设备映射
-        state_dict = torch.load(model_path, map_location=self.device)
-        self.agent.load_state_dict(state_dict)
-        self.agent.to(self.device)  # 确保模型在正确的设备上
+        self.agent.load_state_dict(model_state_dict)
+        self.agent.to(self.device)
         self.agent.eval()
+
+    
 
     def give_init_order(self, truck: Truck, mine: Mine) -> int:
         """
@@ -99,19 +112,21 @@ class PPODispatcher(BaseDispatcher):
         """
         Dispatch the truck to the next action based on model inference.
         """
-        from openmines.src.utils.feature_processing import preprocess_observation 
+        from openmines.src.utils.feature_processing import preprocess_observation
 
         current_observation_raw = self._get_raw_observation(truck, mine)
-        processed_obs = torch.FloatTensor(
-            preprocess_observation(current_observation_raw, self.max_sim_time)
-        ).to(self.device)  # 确保输入数据在正确的设备上
-        
-        with torch.no_grad():  # 推理时不需要梯度
-            action, logprob, _, value, _ = self.agent.get_action_and_value(
-                processed_obs, sug_action=None
-            )        
+        processed_obs = preprocess_observation(current_observation_raw, self.max_sim_time)
 
-        return action
+        # 直接将原始数据转换为 tensor
+        obs_tensor = torch.tensor(processed_obs, dtype=torch.float32).to(self.device)
+
+        # 让 agent 自己处理归一化，这里传入未经归一化的 obs_tensor
+        with torch.no_grad():
+            action, logprob, _, value, _ = self.agent.get_action_and_value(
+                obs_tensor, sug_action=None
+            )
+
+        return int(action.item())
 
     def _get_raw_observation(self, truck: Truck, mine: Mine):
         """
@@ -151,7 +166,8 @@ if __name__ == "__main__":
             self.now = 10.0
 
 
-    dispatcher = PPODispatcher()
+    # dispatcher = PPODispatcher() # 默认使用最新最佳模型
+    dispatcher = PPODispatcher(model_path="/home/chengrongxian/git/openmines/models/PPO_models/best_model_step00000500_tons7244.6_reward0.00.pt") # 只训了500步
     mock_mine = MockMine()
     mock_truck = MockTruck()
 
