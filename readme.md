@@ -1,0 +1,7 @@
+上传到仓库：
+
+git add .
+
+git commit -m "你的提交说明"
+
+git push origin master

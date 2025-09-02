@@ -1,0 +1,150 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Sync & Train (SCP)",
+      "type": "shell",
+      "command": "scp",
+      "args": [
+        "-r",
+        "-P", "22",
+        "C:/Users/95718/Desktop/vscode/MineDisaptcher-openmines/",
+        "chengrongxian@114.212.226.92:/home/chengrongxian/git/"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false
+      }
+    },
+    {
+      "label": "Start Training",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "-p", "22",
+        "chengrongxian@114.212.226.92",
+        "cd /home/chengrongxian/git/MineDisaptcher-openmines && nohup python3 test/cleanrl/ppo_single_net.py > /dev/null 2>&1 & echo $! > /tmp/training.pid"
+      ],
+      "dependsOn": ["Sync & Train (SCP)"],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Start TensorBoard",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "-p", "22",
+        "chengrongxian@114.212.226.92",
+        "cd /home/chengrongxian/git/MineDisaptcher-openmines && nohup tensorboard --logdir=runs --port 6006 --bind_all > /dev/null 2>&1 & echo $! > /tmp/tensorboard.pid"
+      ],
+      "dependsOn": ["Start Training"],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Setup Port Forward",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "-p", "22",
+        "-L", "6006:localhost:6006",
+        "-N",
+        "chengrongxian@114.212.226.92"
+      ],
+      "dependsOn": ["Start TensorBoard"],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^$",
+          "endsPattern": "^$"
+        }
+      }
+    },
+    {
+      "label": "Wait for Completion",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "-p", "22",
+        "chengrongxian@114.212.226.92",
+        "PID=$(cat /tmp/training.pid); while kill -0 $PID 2>/dev/null; do sleep 30; done"
+      ],
+      "dependsOn": ["Setup Port Forward"]
+    },
+    {
+      "label": "Sync Runs (SCP)",
+      "type": "shell",
+      "command": "scp",
+      "args": [
+        "-r",
+        "-P", "22",
+        "chengrongxian@114.212.226.92:/home/chengrongxian/git/MineDisaptcher-openmines/runs/",
+        "C:/Users/95718/Desktop/vscode/MineDisaptcher-openmines/runs/"
+      ],
+      "dependsOn": ["Wait for Completion"]
+    },
+    {
+      "label": "Stop Services",
+      "type": "shell",
+      "command": "ssh",
+      "args": [
+        "-p", "22",
+        "chengrongxian@114.212.226.92",
+        "for pid_file in /tmp/training.pid /tmp/tensorboard.pid; do if [ -f $pid_file ]; then kill $(cat $pid_file) 2>/dev/null; rm $pid_file; fi; done"
+      ],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "Auto Sync Runs",
+      "type": "shell",
+      "command": "while true; do scp -r -P 22 chengrongxian@114.212.226.92:/home/chengrongxian/git/MineDisaptcher-openmines/runs/ C:/Users/95718/Desktop/vscode/MineDisaptcher-openmines/runs/; sleep 60; done",
+      "isBackground": true,
+      "dependsOn": ["Start Training"],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^$",
+          "endsPattern": "^$"
+        }
+      }
+    }
+  ]
+}
