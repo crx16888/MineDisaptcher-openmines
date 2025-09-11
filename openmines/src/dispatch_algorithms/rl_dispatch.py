@@ -323,7 +323,8 @@ class RLDispatcher(BaseDispatcher):
         # 当前车的状态
         the_truck_status = {
             "truck_location": truck.current_location.name,
-            "truck_location_onehot": truck.get_location_onehot(),
+            "truck_location_onehot": truck.get_location_onehot(), 
+            # 根据卡车当前位置类型（ChargingSite/LoadSite/DumpSite）生成 one-hot 编码向量：[充电站位置] + [装载点位置列表] + [卸载点位置列表]
 
             "truck_load": truck.truck_load,
             "truck_capacity": truck.truck_capacity,
@@ -332,9 +333,10 @@ class RLDispatcher(BaseDispatcher):
             "truck_speed": truck.truck_speed,
         }
 
-        # 目标地点状态
+        # 目标地点状态，先判断当前车辆是在充电桩/装载点/卸载点，选择要去的站点类型
         if isinstance(truck.current_location, DumpSite):  # and isinstance(truck.target_location, LoadSite):
             event_name = "unhaul"
+            # # 如果在卸载点，计算路上卡车对等待时间的影响，也是调底层函数
             trucks_on_roads = [mine.road.truck_on_road(start=truck.current_location, end=mine.load_sites[i]) for i in
                                range(len(mine.load_sites))]
             load_time_on_road_trucks = [
@@ -342,6 +344,7 @@ class RLDispatcher(BaseDispatcher):
                 for i, each_road in enumerate(trucks_on_roads)]  # 路上的卡车需要的装载用时
             sig_wait_est = np.array([load_site.estimated_queue_wait_time for load_site in mine.load_sites]) + np.array(
                 load_time_on_road_trucks)
+            # 计算等待时间，也是调底层函数
         elif isinstance(truck.current_location, ChargingSite):
             event_name = "init"
             trucks_on_roads = [mine.road.truck_on_road(start=mine.charging_site, end=mine.load_sites[i]) for i in
@@ -360,6 +363,17 @@ class RLDispatcher(BaseDispatcher):
                                         enumerate(trucks_on_roads)]  # 路上的卡车需要的装载用时
             sig_wait_est = np.array([dump_site.estimated_queue_wait_time for dump_site in mine.dump_sites]) + np.array(
                 dump_time_on_road_trucks)
+        
+        # 目标地点状态聚合，在此处全部计算出来
+        # target_status = {
+        #     "queue_lengths": [...],      # 各站点排队长度
+        #     "capacities": [...],         # 各站点处理能力
+        #     "est_wait": [...],          # 预估等待时间
+        #     "single_est_wait": sig_wait_est,  # 考虑路上卡车的等待时间
+        #     "service_ratio": [...],      # 服务能力比率
+        #     "produced_tons": [...],      # 累计产量
+        #     "service_counts": [...]      # 服务次数
+        # }
         target_status = {
             # stats and digits
             "queue_lengths": [load_site.parking_lot.queue_status["total"]["cur_value"] for load_site in
@@ -381,7 +395,7 @@ class RLDispatcher(BaseDispatcher):
                                                                                             mine.dump_sites],
         }
 
-        # 当前道路状态
+        # 当前道路状态信息的编码，涵盖道路上卡车数量、拥堵卡车数量等
         cur_road_status = {
             "charging2load": {"truck_count": dict(), "distances": dict(), "truck_jam_count": dict(),
                               "repair_count": dict()},
@@ -504,13 +518,19 @@ class RLDispatcher(BaseDispatcher):
         self.last_time = mine.env.now
         # OBSERVATION
         observation = {
-            "truck_name": truck.name,
-            "event_name": event_name,  # order type
-            "info": info,  # total tons, time
-            "the_truck_status": the_truck_status,  # the truck stats
-            "target_status": target_status,  # loading/unloading site stats
-            "cur_road_status": cur_road_status,  # road net status
-            "mine_status": mine.status["cur"],  # 当前矿山KPI、事件总数等统计信息
+            "truck_name": str,                    # 卡车标识
+            "event_name": str,                    # 事件类型 ("init"/"haul"/"unhaul")
+            "info": {                            # 全局信息
+                "produce_tons": float,            # 累计产量
+                "time": float,                    # 当前时间
+                "delta_time": float,              # 时间增量
+                "load_num": int,                  # 装载点数量
+                "unload_num": int                 # 卸载点数量
+            },
+            "the_truck_status": dict,            # 当前卡车状态
+            "target_status": dict,               # 目标地点状态
+            "cur_road_status": dict,             # 道路网络状态
+            "mine_status": dict                  # 矿山整体状态
         }
         return observation
 

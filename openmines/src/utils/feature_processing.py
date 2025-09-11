@@ -1,6 +1,7 @@
 import numpy as np
 
 def preprocess_observation(observation, max_sim_time):
+    # 用于将原始的状态信息处理为194维度矿区状态向量
     """特征预处理逻辑"""
     """
     0.订单信息

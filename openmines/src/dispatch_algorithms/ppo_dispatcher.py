@@ -72,7 +72,7 @@ class PPODispatcher(BaseDispatcher):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
             
-        from openmines.test.cleanrl.ppo_single_net import Agent, Args
+        from openmines.test.cleanrl.ppo_single_net import Agent, Args # 从训练文件中导入agent类，再从训练好的文件中导入agent
         
         self.args = Args()
         # 此处是我修改的代码，可能会去掉
@@ -110,7 +110,7 @@ class PPODispatcher(BaseDispatcher):
         """
         from openmines.src.utils.feature_processing import preprocess_observation 
 
-        current_observation_raw = self._get_raw_observation(truck, mine)
+        current_observation_raw = self._get_raw_observation(truck, mine) # 去看这个函数就知道，从RLDispatcher这个类里面调的
         processed_obs = torch.FloatTensor(
             preprocess_observation(current_observation_raw, self.max_sim_time)
         ).to(self.device)  # 确保输入数据在正确的设备上
