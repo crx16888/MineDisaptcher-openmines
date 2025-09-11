@@ -9,7 +9,7 @@ from tqdm import tqdm
 import pandas as pd
 from multiprocessing import Queue
 import argparse
-from openmines.src.utils.feature_processing import preprocess_observation
+from openmines.src.utils.feature_processing import preprocess_observation_auto
 
 # 这个脚本用于在不同调度器（dispatcher）配置下运行自定义 gym 环境（openmines 的 Mine 环境）若干回合，
 # 从 environment 的 info（包含专家建议动作 sug_action 等）收集状态、动作、奖励与若干元信息，
@@ -36,15 +36,24 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 class DataCollector:
-    def __init__(self, env_config, episodes=100, max_steps=1000, env_id="mine/Mine-v1"):
-        """初始化数据收集器"""
+    def __init__(self, env_config, episodes=100, max_steps=1000, env_id="mine/Mine-v1", use_enhanced_observation=True):
+        """初始化数据收集器
+        
+        Args:
+            use_enhanced_observation: 是否使用384维增强观察（默认True）
+        """
         self.env_config = env_config
         self.episodes = episodes
         self.max_steps = max_steps
         self.env_id = env_id
+        self.use_enhanced_observation = use_enhanced_observation
         self.dataset = []
         self.all_states = []
         self.all_rewards = []  # 添加rewards列表用于存储所有奖励值
+        
+        # 根据配置设置观察维度
+        self.obs_dim = 384 if use_enhanced_observation else 194
+        print(f"数据收集器配置: 使用{'384维增强观察' if use_enhanced_observation else '194维基础观察'}")
         
         # 读取配置文件以获取所有调度器
         with open(env_config, 'r') as f:
@@ -86,10 +95,11 @@ class DataCollector:
             
             # 使用gym.make创建环境，而不是直接使用MineEnv
             try:
-                # 创建环境时传入配置文件和reward_mode
+                # 创建环境时传入配置文件和增强观察配置
                 env = gym.make(
                     self.env_id, 
-                    config_file=temp_config_path, 
+                    config_file=temp_config_path,
+                    use_enhanced_observation=self.use_enhanced_observation
                 ) # 默认是ShortestTripDispatcher算法作为指导算法
                 
                 for episode in tqdm(range(self.episodes), desc=f"Collecting episodes for {dispatcher}"):
@@ -176,9 +186,9 @@ class DataCollector:
         self._save_dataset(len(self.dataset), metrics)
 
     def preprocess_features(self, observation):
-        """使用导入的preprocess_observation函数处理特征"""
+        """使用导入的preprocess_observation_auto函数处理特征"""
         if hasattr(self, 'sim_time') and self.sim_time:
-            return preprocess_observation(observation, self.sim_time)
+            return preprocess_observation_auto(observation, self.sim_time)
         else:
             # 尝试从observation中获取特征
             if isinstance(observation, dict) and 'state' in observation:
@@ -236,7 +246,7 @@ if __name__ == "__main__":
     #                     default="/home/chengrongxian/git/openmines0/openmines/src/conf/north_pit_mine.json",
     #                     help="环境配置文件路径")
     parser.add_argument("--env_config", type=str,
-                        default=r"C:\Users\95718\Desktop\vscode\openmines\openmines\src\conf\north_pit_mine.json",
+                        default="src/conf/north_pit_mine.json",
                         help="环境配置文件路径")
     parser.add_argument("--episodes", type=int, default=50,
                         help="收集数据的回合数")
@@ -244,6 +254,10 @@ if __name__ == "__main__":
                         help="每个回合的最大步数")
     parser.add_argument("--env_id", type=str, default="mine/Mine-v1-dense",
                         help="环境ID")
+    parser.add_argument("--use_enhanced_observation", action="store_true", default=True,
+                        help="是否使用384维增强观察（默认True）")
+    parser.add_argument("--use_basic_observation", dest="use_enhanced_observation", action="store_false",
+                        help="使用194维基础观察")
 
     args = parser.parse_args()
 
@@ -251,6 +265,7 @@ if __name__ == "__main__":
         env_config=args.env_config,
         episodes=args.episodes,
         max_steps=args.max_steps,
-        env_id=args.env_id
+        env_id=args.env_id,
+        use_enhanced_observation=args.use_enhanced_observation
     )
     collector.collect_data()

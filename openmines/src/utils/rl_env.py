@@ -26,7 +26,7 @@ def load_config(filename):
         return json.load(file)
 
 
-def prepare_env(obs_queue:Queue, act_queue:Queue, config:dict, reward_mode:str = "dense",  total_time:float=60*8, log:bool=False, ticks:bool=False, seed:int=42):
+def prepare_env(obs_queue:Queue, act_queue:Queue, config:dict, reward_mode:str = "dense",  total_time:float=60*8, log:bool=False, ticks:bool=False, seed:int=42, use_enhanced_observation:bool=True):
     """接受mp的输入，然后构建mine和子进程。
     为了兼容windows平台的spawn机制
     因为simpy的env无法序列化，所以必须在子进程中构建mine和simpy的env
@@ -34,12 +34,27 @@ def prepare_env(obs_queue:Queue, act_queue:Queue, config:dict, reward_mode:str =
     :param obs_queue:
     :param act_queue:
     :param total_time:
+    :param use_enhanced_observation: 是否使用384维增强观察
     :return:
     """
     # log_path 为cwd下的logs文件夹
     log_path = pathlib.Path.cwd() / 'logs'
+    
+    # 创建观察配置
+    from openmines.src.dispatch_algorithms.rl_dispatch import ObservationConfig
+    if use_enhanced_observation:
+        observation_config = ObservationConfig.create_enhanced_config()
+        print(f"训练环境: 使用384维增强观察")
+    else:
+        observation_config = ObservationConfig.create_basic_config()
+        print(f"训练环境: 使用194维基础观察")
+    
     # dispatcher
-    dispatcher = RLDispatcher(sug_dispatcher=config['sug_dispatcher'], reward_mode=reward_mode)
+    dispatcher = RLDispatcher(
+        sug_dispatcher=config['sug_dispatcher'], 
+        reward_mode=reward_mode,
+        observation_config=observation_config
+    )
     # 初始化矿山
     mine = Mine(config['mine']['name'], log_path=log_path,
                 log_file_level=logging.DEBUG if log else logging.ERROR,

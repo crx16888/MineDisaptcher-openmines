@@ -11,12 +11,16 @@ from openmines.src.truck import Truck
 
 # ppo_norm_params_dense.json，每次训练前记得替换
 # 导入 rl_dispatch.py 中的 preprocess_observation 函数
-from openmines.src.dispatch_algorithms.rl_dispatch import RLDispatcher
+from openmines.src.dispatch_algorithms.rl_dispatch import RLDispatcher, ObservationConfig
 
 class PPODispatcher(BaseDispatcher):
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, use_enhanced_observation: bool = False):
         super().__init__()
         self.name = "PPODispatcher"
+        
+        # 先设置必要的属性
+        self.use_enhanced_observation = use_enhanced_observation
+        self.max_sim_time = 240
         
         # 如果指定了模型路径，使用指定的模型
         if model_path is not None:
@@ -28,26 +32,34 @@ class PPODispatcher(BaseDispatcher):
         
         self.device = self._get_device()
         self.load_rl_model(self.model_path)
-        self.rl_dispatcher_helper = RLDispatcher("ShortestTripDispatcher", reward_mode="dense")
-        self.max_sim_time = 240
+        
+        # 创建观察配置
+        if use_enhanced_observation:
+            observation_config = ObservationConfig.create_enhanced_config()
+        else:
+            observation_config = ObservationConfig.create_basic_config()
+        
+        self.rl_dispatcher_helper = RLDispatcher("ShortestTripDispatcher", reward_mode="dense", observation_config=observation_config)
 
     def _find_latest_best_model(self):
         """自动查找最新的最佳模型文件"""
-        # 检查模型目录
-        checkpoints_dir = "/home/chengrongxian/git/openmines/checkpoints/mine"
+        # 检查模型目录 - 使用相对路径，从项目根目录开始
+        import pathlib
+        project_root = pathlib.Path(__file__).parent.parent.parent.parent
+        checkpoints_dir = project_root / "checkpoints" / "mine"
         
-        if not os.path.exists(checkpoints_dir):
+        if not checkpoints_dir.exists():
             raise FileNotFoundError(f"Checkpoints directory not found: {checkpoints_dir}")
         
-        # 查找所有best_model_开头的.pt文件
+        # 查找所有model_开头的.pt文件（实际文件名格式）
         model_files = []
-        for root, dirs, files in os.walk(checkpoints_dir):
+        for root, dirs, files in os.walk(str(checkpoints_dir)):
             for file in files:
-                if file.startswith('best_model_') and file.endswith('.pt'):
+                if file.startswith('model_') and file.endswith('.pt'):
                     model_files.append(os.path.join(root, file))
         
         if not model_files:
-            raise FileNotFoundError(f"No best model files found in: {checkpoints_dir}")
+            raise FileNotFoundError(f"No model files found in: {checkpoints_dir}")
         
         # 按训练时的吨数排序，选择性能最好的
         model_files.sort(key=lambda x: float(x.split('tons')[1].split('_')[0]), reverse=True)
@@ -77,11 +89,54 @@ class PPODispatcher(BaseDispatcher):
         self.args = Args()
         # 此处是我修改的代码，可能会去掉
         self.args.r_mode = "none"  # 避免推理时错误的奖励处理
-        self.agent = Agent(envs=None, args=self.args, 
-                         norm_path="/home/chengrongxian/git/openmines/datasets/dispatch_data_20250719_122119/normalization_params.json") # 使用训练时的正则化参数
         
-        # 加载模型时指定设备映射
-        state_dict = torch.load(model_path, map_location=self.device)
+        # 动态获取配置文件和正则化参数路径
+        import pathlib
+        project_root = pathlib.Path(__file__).parent.parent.parent.parent
+        
+        # 设置mine_config路径
+        self.args.mine_config = str(project_root / "openmines" / "src" / "conf" / "north_pit_mine.json")
+        
+        # 查找正则化参数文件
+        datasets_dir = project_root / "datasets"
+        norm_path = None
+        if datasets_dir.exists():
+            for dataset_folder in datasets_dir.iterdir():
+                if dataset_folder.is_dir():
+                    norm_file = dataset_folder / "normalization_params.json"
+                    if norm_file.exists():
+                        norm_path = str(norm_file)
+                        break
+        
+        if norm_path is None:
+            # 如果找不到正则化参数文件，使用默认路径
+            norm_path = str(project_root / "datasets" / "dispatch_data_20250719_122119" / "normalization_params.json")
+        
+        # 由于Agent需要观察空间维度，我们需要创建一个具有正确观察空间的mock环境对象
+        class MockEnv:
+            def __init__(self, obs_dim):
+                self.single_observation_space = type('MockSpace', (), {'shape': (obs_dim,)})()
+        
+        # 根据use_enhanced_observation设置正确的观察维度
+        obs_dim = 384 if self.use_enhanced_observation else 194
+        mock_env = MockEnv(obs_dim)
+        
+        # 创建Agent时传入mock环境
+        self.agent = Agent(envs=mock_env, args=self.args, norm_path=norm_path)
+        
+        # 加载模型时指定设备映射，并设置weights_only=False以兼容旧版模型
+        # 确保Args类在全局命名空间中可用
+        import sys
+        sys.modules['__main__'].Args = Args
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+        
+        # 从checkpoint中提取模型的state_dict
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            # 如果直接保存的是state_dict
+            state_dict = checkpoint
+            
         self.agent.load_state_dict(state_dict)
         self.agent.to(self.device)  # 确保模型在正确的设备上
         self.agent.eval()
@@ -108,11 +163,11 @@ class PPODispatcher(BaseDispatcher):
         """
         Dispatch the truck to the next action based on model inference.
         """
-        from openmines.src.utils.feature_processing import preprocess_observation 
+        from openmines.src.utils.feature_processing import preprocess_observation_auto
 
         current_observation_raw = self._get_raw_observation(truck, mine) # 去看这个函数就知道，从RLDispatcher这个类里面调的
         processed_obs = torch.FloatTensor(
-            preprocess_observation(current_observation_raw, self.max_sim_time)
+            preprocess_observation_auto(current_observation_raw, self.max_sim_time)
         ).to(self.device)  # 确保输入数据在正确的设备上
         
         with torch.no_grad():  # 推理时不需要梯度

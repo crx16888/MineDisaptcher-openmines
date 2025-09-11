@@ -21,9 +21,34 @@ from openmines.src.mine import Mine
 # 删除所有具体dispatcher的import，改用动态导入
 import importlib
 
+# 观察配置类
+class ObservationConfig:
+    """观察配置类"""
+    def __init__(self):
+        self.use_enhanced_observation = False
+        self.max_tracked_trucks = 10
+        self.include_truck_positions = True
+        self.include_movement_directions = True
+        self.include_eta_predictions = True
+        self.include_progress_states = True
+    
+    @classmethod
+    def create_enhanced_config(cls):
+        """创建增强观察配置"""
+        config = cls()
+        config.use_enhanced_observation = True
+        return config
+    
+    @classmethod
+    def create_basic_config(cls):
+        """创建基础观察配置"""
+        config = cls()
+        config.use_enhanced_observation = False
+        return config
+
 # 全局队列和锁，确保多个进程间的数据不会混淆
 class RLDispatcher(BaseDispatcher):
-    def __init__(self, sug_dispatcher:str, reward_mode:str): # PPO调度算法中，self.rl_dispatcher_helper = RLDispatcher("NaiveDispatcher", reward_mode="dense")
+    def __init__(self, sug_dispatcher:str, reward_mode:str, observation_config: ObservationConfig = None): # PPO调度算法中，self.rl_dispatcher_helper = RLDispatcher("NaiveDispatcher", reward_mode="dense")
         """
         初始化RLDispatcher实例。
         """
@@ -31,6 +56,8 @@ class RLDispatcher(BaseDispatcher):
         self.name = "RLDispatcher"
         self.sug_dispatcher = sug_dispatcher
         self.reward_mode = reward_mode
+        # 添加观察配置
+        self.observation_config = observation_config or ObservationConfig.create_basic_config()
         # 动态导入dispatcher类
         try:
             def camel_to_snake(name):
@@ -62,8 +89,11 @@ class RLDispatcher(BaseDispatcher):
         start_time = time.time()
         timeout = 30  # 设置总超时时间为10秒
         try:
-            # 1: 获取观察值
-            self.current_observation = self._get_observation(truck, mine)
+            # 1: 获取观察值（根据配置选择）
+            if self.observation_config.use_enhanced_observation:
+                self.current_observation = self._get_enhanced_observation(truck, mine)
+            else:
+                self.current_observation = self._get_observation(truck, mine)
             info = self.current_observation["info"]
             # reward = self.last_reward  # 读取上一次的reward并进行计算
             # 计算奖励（基于上一步的动作）
@@ -518,21 +548,190 @@ class RLDispatcher(BaseDispatcher):
         self.last_time = mine.env.now
         # OBSERVATION
         observation = {
-            "truck_name": str,                    # 卡车标识
-            "event_name": str,                    # 事件类型 ("init"/"haul"/"unhaul")
-            "info": {                            # 全局信息
-                "produce_tons": float,            # 累计产量
-                "time": float,                    # 当前时间
-                "delta_time": float,              # 时间增量
-                "load_num": int,                  # 装载点数量
-                "unload_num": int                 # 卸载点数量
-            },
-            "the_truck_status": dict,            # 当前卡车状态
-            "target_status": dict,               # 目标地点状态
-            "cur_road_status": dict,             # 道路网络状态
-            "mine_status": dict                  # 矿山整体状态
+            "truck_name": truck.name,                    # 卡车标识
+            "event_name": event_name,                    # 事件类型 ("init"/"haul"/"unhaul")
+            "info": info,                               # 全局信息
+            "the_truck_status": the_truck_status,       # 当前卡车状态
+            "target_status": target_status,             # 目标地点状态
+            "cur_road_status": cur_road_status,         # 道路网络状态
+            "mine_status": mine.status["cur"]           # 矿山整体状态
         }
         return observation
+
+    def _get_enhanced_observation(self, truck: Truck, mine: Mine) -> dict:
+        """
+        获取增强的观察信息（包含其他车辆详细信息）
+        :param truck: 当前卡车
+        :param mine: 矿山对象
+        :return: 增强的观察字典
+        """
+        # 获取原始观察
+        base_observation = self._get_observation(truck, mine)
+        
+        # 获取其他车辆详细信息
+        other_trucks_detail = self._get_other_trucks_detailed_info(truck, mine)
+        
+        # 合并观察信息
+        enhanced_observation = base_observation.copy()
+        enhanced_observation["other_trucks_detailed"] = other_trucks_detail
+        
+        return enhanced_observation
+
+    def _get_other_trucks_detailed_info(self, current_truck: Truck, mine: Mine) -> dict:
+        """
+        获取其他车辆的详细信息
+        :param current_truck: 当前决策的卡车
+        :param mine: 矿山对象
+        :return: 包含其他车辆详细信息的字典
+        """
+        other_trucks_info = {
+            "detailed_positions": [],
+            "movement_directions": [],
+            "progress_states": [],
+            "eta_predictions": []
+        }
+        
+        for truck in mine.trucks:
+            if truck.name == current_truck.name:
+                continue
+                
+            # 获取详细位置信息
+            detailed_pos = self._get_truck_detailed_position(truck)
+            movement_dir = self._get_truck_movement_direction(truck)
+            progress_state = self._calculate_truck_road_progress(truck, mine)
+            eta_pred = self._predict_truck_eta(truck, mine)
+            
+            other_trucks_info["detailed_positions"].append(detailed_pos)
+            other_trucks_info["movement_directions"].append(movement_dir)
+            other_trucks_info["progress_states"].append(progress_state)
+            other_trucks_info["eta_predictions"].append(eta_pred)
+        
+        return other_trucks_info
+
+    def _get_truck_detailed_position(self, truck: Truck) -> dict:
+        """获取单个卡车的详细位置信息"""
+        # 如果车辆正在移动，位置应该表示为"在路上"而不是起始位置
+        if truck.status == "moving" and truck.target_location:
+            location_name = f"road_to_{truck.target_location.name}"
+            location_type = "road"
+        else:
+            location_name = truck.current_location.name if truck.current_location else "unknown"
+            location_type = self._get_location_type(truck.current_location)
+            
+        return {
+            "current_location_name": location_name,
+            "target_location_name": truck.target_location.name if truck.target_location else None,
+            "current_location_type": location_type,
+            "target_location_type": self._get_location_type(truck.target_location),
+            "status": truck.status,
+            "load_ratio": truck.truck_load / truck.truck_capacity if truck.truck_capacity > 0 else 0.0
+        }
+
+    def _get_truck_movement_direction(self, truck: Truck) -> str:
+        """获取卡车的移动方向类型"""
+        if truck.status != "moving" or not truck.target_location:
+            return "stationary"
+        
+        current_type = self._get_location_type(truck.current_location)
+        target_type = self._get_location_type(truck.target_location)
+        
+        if current_type == "charging" and target_type == "load":
+            return "init"
+        elif current_type == "load" and target_type == "dump":
+            return "haul"  
+        elif current_type == "dump" and target_type == "load":
+            return "unhaul"
+        else:
+            return "unknown"
+
+    def _calculate_truck_road_progress(self, truck: Truck, mine: Mine) -> dict:
+        """计算卡车在道路上的进度"""
+        if truck.status != "moving" or not truck.target_location:
+            return {"progress_ratio": 0.0, "remaining_distance": 0.0, "total_distance": 0.0}
+        
+        # 获取总距离
+        total_distance = self._get_road_distance(truck.current_location, truck.target_location, mine)
+        
+        # 计算进度（这里需要根据实际的移动时间计算）
+        if hasattr(truck, 'movement_start_time') and truck.movement_start_time is not None:
+            elapsed_time = mine.env.now - truck.movement_start_time
+            expected_travel_time = total_distance * 60 / truck.truck_speed  # 转换为分钟
+            progress_ratio = min(elapsed_time / expected_travel_time, 1.0) if expected_travel_time > 0 else 0.0
+        else:
+            progress_ratio = 0.0
+        
+        remaining_distance = total_distance * (1 - progress_ratio)
+        
+        return {
+            "progress_ratio": progress_ratio,
+            "remaining_distance": remaining_distance,
+            "total_distance": total_distance
+        }
+
+    def _predict_truck_eta(self, truck: Truck, mine: Mine) -> dict:
+        """预测卡车到达目标的时间"""
+        if truck.status != "moving" or not truck.target_location:
+            return {"eta_minutes": 0.0, "eta_absolute_time": mine.env.now}
+        
+        progress_info = self._calculate_truck_road_progress(truck, mine)
+        remaining_distance = progress_info["remaining_distance"]
+        eta_minutes = remaining_distance * 60 / truck.truck_speed if truck.truck_speed > 0 else 0.0
+        eta_absolute_time = mine.env.now + eta_minutes
+        
+        return {
+            "eta_minutes": eta_minutes,
+            "eta_absolute_time": eta_absolute_time
+        }
+
+    def _get_location_type(self, location) -> str:
+        """获取位置类型"""
+        if location is None:
+            return "unknown"
+        elif isinstance(location, ChargingSite):
+            return "charging"
+        elif isinstance(location, LoadSite):
+            return "load"
+        elif isinstance(location, DumpSite):
+            return "dump"
+        else:
+            return "unknown"
+
+    def _get_road_distance(self, start_location, end_location, mine: Mine) -> float:
+        """获取两点间的道路距离"""
+        if not start_location or not end_location:
+            return 0.0
+        
+        # 根据位置类型查找对应的距离矩阵
+        start_type = self._get_location_type(start_location)
+        end_type = self._get_location_type(end_location)
+        
+        if start_type == "charging" and end_type == "load":
+            load_idx = self._get_load_site_index(end_location, mine)
+            return mine.road.charging_to_load[load_idx] if load_idx >= 0 else 0.0
+        elif start_type == "load" and end_type == "dump":
+            load_idx = self._get_load_site_index(start_location, mine)
+            dump_idx = self._get_dump_site_index(end_location, mine)
+            return mine.road.l2d_road_matrix[load_idx][dump_idx] if load_idx >= 0 and dump_idx >= 0 else 0.0
+        elif start_type == "dump" and end_type == "load":
+            dump_idx = self._get_dump_site_index(start_location, mine)
+            load_idx = self._get_load_site_index(end_location, mine)
+            return mine.road.d2l_road_matrix[dump_idx][load_idx] if dump_idx >= 0 and load_idx >= 0 else 0.0
+        else:
+            return 0.0
+
+    def _get_load_site_index(self, load_site, mine: Mine) -> int:
+        """获取装载点索引"""
+        for i, site in enumerate(mine.load_sites):
+            if site.name == load_site.name:
+                return i
+        return -1
+
+    def _get_dump_site_index(self, dump_site, mine: Mine) -> int:
+        """获取卸载点索引"""
+        for i, site in enumerate(mine.dump_sites):
+            if site.name == dump_site.name:
+                return i
+        return -1
 
 
 def normalize_list_inplace(lst):

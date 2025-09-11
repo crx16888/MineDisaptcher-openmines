@@ -20,6 +20,7 @@ openmines/src/truck.py
 openmines/src/cli/__init__.py
 openmines/src/cli/run.py
 openmines/src/dispatch_algorithms/__init__.py
+openmines/src/dispatch_algorithms/am_dispatcher.py
 openmines/src/dispatch_algorithms/fixed_group_dispatcher.py
 openmines/src/dispatch_algorithms/naive_dispatcher.py
 openmines/src/dispatch_algorithms/nearest_dispatcher.py

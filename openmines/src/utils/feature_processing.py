@@ -18,8 +18,23 @@ def preprocess_observation(observation, max_sim_time):
         event_type = [0, 0, 1]
         action_space_n = observation['info']['load_num']
     # 2.当前订单时间绝对位置和相对位置
-    time_delta = float(observation['info']['delta_time'])  # 距离上次调度的时间
-    time_now = float(observation['info']['time']) / max_sim_time  # 当前时间(正则化）
+    # 添加调试信息和错误处理
+    delta_time_raw = observation['info']['delta_time']
+    time_raw = observation['info']['time']
+    
+    try:
+        time_delta = float(delta_time_raw)  # 距离上次调度的时间
+    except (TypeError, ValueError) as e:
+        print(f"Error converting delta_time to float: {delta_time_raw}, type: {type(delta_time_raw)}")
+        # 如果转换失败，使用默认值
+        time_delta = 0.0
+    
+    try:
+        time_now = float(time_raw) / max_sim_time  # 当前时间(正则化）
+    except (TypeError, ValueError) as e:
+        print(f"Error converting time to float: {time_raw}, type: {type(time_raw)}")
+        # 如果转换失败，使用默认值
+        time_now = 0.0
     time_left = 1 - time_now  # 距离结束时间
     order_state = np.array([event_type[0], event_type[1], event_type[2], time_delta, time_now, time_left])
 
@@ -73,4 +88,122 @@ def preprocess_observation(observation, max_sim_time):
     assert not np.isnan(time_delta), f"NaN detected in time_delta: {time_delta}"
     assert not np.isnan(time_now), f"NaN detected in time_now: {time_now}"
 
-    return state.astype(np.float32) 
+    return state.astype(np.float32)
+
+
+def preprocess_enhanced_observation(observation, max_sim_time, max_tracked_trucks=10):
+    """
+    处理包含其他车辆详细信息的增强观察
+    :param observation: 增强观察字典
+    :param max_sim_time: 最大仿真时间
+    :param max_tracked_trucks: 最大跟踪车辆数
+    :return: 扩展的特征向量
+    """
+    # 获取基础特征（原有的194维）
+    base_features = preprocess_observation(observation, max_sim_time)
+    
+    # 处理其他车辆详细信息
+    other_trucks_features = _process_other_trucks_detailed(
+        observation.get("other_trucks_detailed", {}), 
+        max_tracked_trucks
+    )
+    
+    # 合并特征
+    enhanced_features = np.concatenate([base_features, other_trucks_features])
+    return enhanced_features.astype(np.float32)
+
+
+def _process_other_trucks_detailed(other_trucks_info: dict, max_tracked_trucks: int) -> np.ndarray:
+    """处理其他车辆的详细信息"""
+    detailed_positions = other_trucks_info.get("detailed_positions", [])
+    movement_directions = other_trucks_info.get("movement_directions", [])
+    progress_states = other_trucks_info.get("progress_states", [])
+    eta_predictions = other_trucks_info.get("eta_predictions", [])
+    
+    all_truck_features = []
+    
+    for i in range(max_tracked_trucks):
+        if i < len(detailed_positions):
+            # 处理单个车辆的特征
+            truck_features = _encode_single_truck_features(
+                detailed_positions[i],
+                movement_directions[i],
+                progress_states[i],
+                eta_predictions[i]
+            )
+        else:
+            # 填充零向量
+            truck_features = np.zeros(19)  # 每辆车19维特征
+        
+        all_truck_features.extend(truck_features)
+    
+    return np.array(all_truck_features)
+
+
+def _encode_single_truck_features(position_info: dict, direction: str, progress: dict, eta: dict) -> np.ndarray:
+    """编码单个车辆的特征"""
+    # 位置编码 (11维 one-hot)
+    location_onehot = _encode_location_name(position_info["current_location_name"])
+    
+    # 方向编码 (4维 one-hot)
+    direction_onehot = _encode_movement_direction(direction)
+    
+    # 数值特征 (4维)
+    numerical_features = [
+        position_info["load_ratio"],
+        progress["progress_ratio"],
+        eta["eta_minutes"] / 60.0,  # 标准化为小时
+        1.0 if position_info["status"] == "moving" else 0.0
+    ]
+    
+    return np.concatenate([location_onehot, direction_onehot, numerical_features])
+
+
+def _encode_location_name(location_name: str) -> np.ndarray:
+    """将位置名称编码为one-hot向量"""
+    onehot = np.zeros(11)  # 1充电站+5装载点+5卸载点
+    
+    # 处理道路上的情况：road_to_destination
+    if location_name.startswith("road_to_"):
+        destination = location_name.replace("road_to_", "")
+        location_name = destination
+    
+    if "charging" in location_name.lower():
+        onehot[0] = 1.0
+    elif "load_site" in location_name.lower():
+        # 提取装载点编号
+        try:
+            site_num = int(location_name.split('_')[-1])
+            if 1 <= site_num <= 5:
+                onehot[site_num] = 1.0
+        except:
+            pass
+    elif "dump_site" in location_name.lower():
+        # 提取卸载点编号
+        try:
+            site_num = int(location_name.split('_')[-1])
+            if 1 <= site_num <= 5:
+                onehot[5 + site_num] = 1.0
+        except:
+            pass
+    
+    return onehot
+
+
+def _encode_movement_direction(direction: str) -> np.ndarray:
+    """编码移动方向"""
+    direction_map = {"init": 0, "haul": 1, "unhaul": 2, "stationary": 3}
+    onehot = np.zeros(4)
+    if direction in direction_map:
+        onehot[direction_map[direction]] = 1.0
+    return onehot
+
+
+def preprocess_observation_auto(observation, max_sim_time):
+    """
+    自动选择处理函数的包装器
+    """
+    if "other_trucks_detailed" in observation:
+        return preprocess_enhanced_observation(observation, max_sim_time)
+    else:
+        return preprocess_observation(observation, max_sim_time) 

@@ -15,7 +15,7 @@ import re
 import inflection
 
 from openmines.src.utils.rl_env import prepare_env
-from openmines.src.utils.feature_processing import preprocess_observation
+from openmines.src.utils.feature_processing import preprocess_observation_auto
 
 
 def get_dispatcher_class(sug_dispatcher):
@@ -52,7 +52,7 @@ class GymMineEnv(gym.Env):
     """将矿山环境包装为标准的gym环境"""
     metadata = {"render_modes": None, "render_fps": None}
 
-    def __init__(self, config_file, reward_mode:str = "dense", sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False):
+    def __init__(self, config_file, reward_mode:str = "dense", sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False, use_enhanced_observation:bool=True):
         super().__init__()
 
         # 加载配置
@@ -63,6 +63,7 @@ class GymMineEnv(gym.Env):
         # 添加调度器配置
         self.config['sug_dispatcher'] = sug_dispatcher
         self.reward_mode = reward_mode
+        self.use_enhanced_observation = use_enhanced_observation
         
         self.load_site_n = len(self.config['load_sites'])
         self.dump_site_n = len(self.config['dump_sites'])
@@ -81,8 +82,13 @@ class GymMineEnv(gym.Env):
         self.action_space = spaces.Discrete(max_choices)
         road_n = self.load_site_n * self.dump_site_n * 2 + self.load_site_n
         site_n = self.load_site_n + self.dump_site_n
-        # 观察空间：使用Dict空间来匹配原始环境的字典格式
-        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(194,), dtype=np.float32)
+        # 观察空间：根据配置选择维度
+        if use_enhanced_observation:
+            obs_dim = 384  # 基础194维 + 增强190维
+        else:
+            obs_dim = 194  # 基础观察
+            
+        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(obs_dim,), dtype=np.float32)
         #
         #     (
         #     spaces.Dict({
@@ -146,7 +152,7 @@ class GymMineEnv(gym.Env):
         self.process = multiprocessing.Process(
             target=prepare_env,
             args=(self.obs_queue, self.act_queue, self.config,
-                  self.reward_mode, self.config['sim_time'], self.log, self.ticks, self.seed_value)
+                  self.reward_mode, self.config['sim_time'], self.log, self.ticks, self.seed_value, self.use_enhanced_observation)
         )
         self.process.start()
 
@@ -154,8 +160,8 @@ class GymMineEnv(gym.Env):
         out = self.obs_queue.get()
         observation = out["ob"]
         info = out["info"]
-        # 预处理观察
-        processed_obs = preprocess_observation(observation, self.max_sim_time)
+        # 预处理观察（自动选择处理函数）
+        processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
         return processed_obs, info
 
     def step(self, action: int) -> tuple[Any, float, bool, bool, dict[str, Any]]:
@@ -171,8 +177,8 @@ class GymMineEnv(gym.Env):
         truncated = out["truncated"]
         info = out["info"]
 
-        # 预处理观察
-        processed_obs = preprocess_observation(observation, self.max_sim_time)
+        # 预处理观察（自动选择处理函数）
+        processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
 
         return processed_obs, reward, terminated, truncated, info
 
@@ -193,7 +199,7 @@ class ThreadMineEnv(gym.Env):
     """将矿山环境包装为标准的gym环境(线程版本)"""
     metadata = {"render_modes": None, "render_fps": None}
 
-    def __init__(self, config_file, reward_mode:str = "dense", sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False):
+    def __init__(self, config_file, reward_mode:str = "dense", sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False, use_enhanced_observation:bool=False):
         super().__init__()
 
         # 加载配置
@@ -204,6 +210,7 @@ class ThreadMineEnv(gym.Env):
         # 添加调度器配置    
         self.config['sug_dispatcher'] = sug_dispatcher
         self.reward_mode = reward_mode
+        self.use_enhanced_observation = use_enhanced_observation
         
         self.load_site_n = len(self.config['load_sites'])
         self.dump_site_n = len(self.config['dump_sites'])
@@ -220,11 +227,16 @@ class ThreadMineEnv(gym.Env):
         )
         self.action_space = spaces.Discrete(max_choices)
 
-        # 观察空间：26维状态空间
+        # 观察空间：根据配置选择维度
+        if use_enhanced_observation:
+            obs_dim = 384  # 基础194维 + 增强190维
+        else:
+            obs_dim = 194  # 基础观察
+            
         self.observation_space = spaces.Box(
             low=0,
             high=np.inf,
-            shape=(194,),
+            shape=(obs_dim,),
             dtype=np.float32
         )
 
@@ -309,7 +321,8 @@ class ThreadMineEnv(gym.Env):
                 self.config['sim_time'],
                 self.log,
                 self.ticks,
-                None
+                None,
+                self.use_enhanced_observation
             )
         )
         self.thread.daemon = True
@@ -319,7 +332,7 @@ class ThreadMineEnv(gym.Env):
         observation = out["ob"]
         info = out["info"]
 
-        processed_obs = preprocess_observation(observation, self.max_sim_time)
+        processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
         return processed_obs, info
 
     def step(self, action: int) -> tuple[Any, float, bool, bool, dict[str, Any]]:
@@ -335,8 +348,8 @@ class ThreadMineEnv(gym.Env):
         truncated = out["truncated"]
         info = out["info"]
 
-        # 预处理观察
-        processed_obs = preprocess_observation(observation, self.max_sim_time)
+        # 预处理观察（自动选择处理函数）
+        processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
 
         return processed_obs, reward, terminated, truncated, info
 
@@ -355,8 +368,8 @@ class ThreadMineEnv(gym.Env):
 
 class ThreadMineDenseEnv(ThreadMineEnv):
     """密集奖励的多线程矿山环境"""
-    def __init__(self, config_file, sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False):
-        super().__init__(config_file=config_file, reward_mode="dense", sug_dispatcher=sug_dispatcher, seed=seed, log=log, ticks=ticks)
+    def __init__(self, config_file, sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False, use_enhanced_observation:bool=False):
+        super().__init__(config_file=config_file, reward_mode="dense", sug_dispatcher=sug_dispatcher, seed=seed, log=log, ticks=ticks, use_enhanced_observation=use_enhanced_observation)
 
 class ThreadMineSparseEnv(ThreadMineEnv):
     """稀疏奖励的多线程矿山环境"""

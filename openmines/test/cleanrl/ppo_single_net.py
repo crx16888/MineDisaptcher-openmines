@@ -51,8 +51,9 @@ class Args:
 
     # Algorithm-specific arguments
     env_id: str = "mine/Mine-v1"
-    mine_config: str = "/home/chengrongxian/git/openmines/openmines/src/conf/north_pit_mine.json"
+    mine_config: str = "src/conf/north_pit_mine.json"
     total_timesteps: int = 10000000
+    use_enhanced_observation: bool = True  # 是否使用384维增强观察
 
     # ------ 以下是目标超参数 ------
     learning_rate: float = 0.002275497790550207
@@ -95,6 +96,7 @@ class Args:
     num_iterations: int = 0
 
     # 添加网络宽度参数
+    
     hidden_size: int = 256
     """neural network hidden size"""
 
@@ -102,18 +104,20 @@ class Args:
     """正则化模式选择: reward_norm - 使用预计算的统计值正则化reward, return_norm - 对每个batch的returns进行在线正则化"""
 
     # 添加norm_path参数
-    norm_path: Optional[str] = "/home/chengrongxian/git/openmines/datasets/dispatch_data_20250811_124705/normalization_params.json"
+    norm_path: Optional[str] = r"C:\Users\95718\Desktop\vscode\MineDisaptcher-openmines\datasets\dispatch_data_20250911_224333\normalization_params.json"
     """正则化参数文件的路径，如果不指定则使用默认路径或重新生成"""
     # 默认路径就是当前工作目录，即运行脚本时所在的目录。程序会在这个目录下查找名为 normalization_params.json 的文件
 
 
-def make_env(env_id, idx, capture_video, run_name):
+def make_env(env_id, idx, capture_video, run_name, use_enhanced_observation=True):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array")
+            env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array", 
+                          use_enhanced_observation=use_enhanced_observation)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id, config_file=args.mine_config) # 使用配置文件初始化环境，具体在rl_env.py中;默认专家算法为sug_dispatcher:str="ShortestTripDispatcher"
+            env = gym.make(env_id, config_file=args.mine_config, 
+                          use_enhanced_observation=use_enhanced_observation) # 使用配置文件初始化环境，具体在rl_env.py中;默认专家算法为sug_dispatcher:str="ShortestTripDispatcher"
         env = gym.wrappers.RecordEpisodeStatistics(env)
         return env
     return thunk
@@ -138,7 +142,9 @@ class Agent(nn.Module):
         
         self.max_action_dim = max(self.load_sites_num, self.dump_sites_num)
 
-        self.obs_shape = 194
+        # 观察空间维度：从环境动态获取
+        self.obs_shape = envs.single_observation_space.shape[0]
+        print(f"智能体观察维度: {self.obs_shape}维")
         # 加载正则化参数
         if norm_path is None:
             norm_path = manage_normalization_params(args=args) # 找到使用的正则化参数文件
@@ -399,43 +405,9 @@ def manage_normalization_params(args: Optional[Args] = None) -> str:
         print(f"  路径: {os.path.abspath(param_file_path)}")
         print(f"  创建时间: {create_time}")
         
-        # 带倒计时的输入提示
-        import threading
-        if os.name == 'nt':
-            import msvcrt
-        
-        timeout = 10  # 10秒倒计时
-        answer = None
-        
-        def input_thread():
-            nonlocal answer
-            answer = input(f"是否使用此文件? [Y/n] ({timeout}秒后自动选Y): ").strip().lower()
-        
-        def countdown_thread():
-            nonlocal timeout
-            while timeout > 0 and answer is None:
-                sys.stdout.write(f"\r等待输入... {timeout}秒 ")
-                sys.stdout.flush()
-                time.sleep(1)
-                timeout -= 1
-            sys.stdout.write("\r" + " " * 30 + "\r")  # 清除倒计时显示
-            sys.stdout.flush()
-        
-        input_t = threading.Thread(target=input_thread)
-        input_t.daemon = True
-        input_t.start()
-        
-        countdown_t = threading.Thread(target=countdown_thread)
-        countdown_t.daemon = True
-        countdown_t.start()
-        
-        input_t.join(timeout + 0.5)  # 给一点额外时间
-        
-        if answer is None:  # 超时，默认使用现有文件
-            print("超时，默认使用现有参数文件")
-            use_existing_file = True
-        else:
-            use_existing_file = answer == "" or answer == "y"
+        # 自动使用找到的文件，避免交互式输入中断训练
+        print(f"自动使用找到的正则化参数文件")
+        use_existing_file = True
     
     # 3. 如果用户选择不使用已有文件或没有找到文件，从dqn_collector收集新数据
     if not use_existing_file:
@@ -563,21 +535,7 @@ if __name__ == "__main__":
     args.minibatch_size = args.batch_size // args.num_minibatches 
     args.num_iterations = args.total_timesteps // args.batch_size #计算完成总训练步数需要的迭代次数
 
-    run_name = f"{args.env_id}__{args.exp_name}__"\
-               f"s{args.seed}__"\
-               f"lr{args.learning_rate:.2e}__"\
-               f"e{args.ent_coef:.2e}__"\
-               f"g{args.gamma:.3f}__"\
-               f"c{args.clip_coef:.2f}__"\
-               f"l{args.gae_lambda:.3f}__"\
-               f"ep{args.update_epochs}__"\
-               f"gr{args.max_grad_norm:.2f}__"\
-               f"hs{args.hidden_size}__"\
-               f"ns{args.num_steps}__"\
-               f"ne{args.num_envs}__"\
-               f"mb{args.num_minibatches}__"\
-               f"rm{args.r_mode}__"\
-               f"t{int(time.time())}"
+    run_name = f"Mine-v1_ppo_s{args.seed}_t{int(time.time())}"
 
     if args.track:
         import wandb
@@ -591,6 +549,10 @@ if __name__ == "__main__":
             save_code=True,
         )
 
+    # 确保runs目录存在
+    runs_dir = "runs"
+    os.makedirs(runs_dir, exist_ok=True)
+    
     writer = SummaryWriter(f"runs/{run_name}")
     writer.add_text(
         "hyperparameters",
@@ -610,8 +572,12 @@ if __name__ == "__main__":
     # AsyncVectorEnv 是Gymnasium提供的 异步向量化环境 ，它的同步机制是并行执行，
     # 主进程调用 envs.step() 时会等待所有50个环境都完成当前步骤
     # 所有环境完成后，一次性返回50个环境的观察、奖励、终止状态等
+    # 控制是否使用384维增强观察
+    use_enhanced_observation = args.use_enhanced_observation
+    print(f"训练配置: 使用{'384维增强观察' if use_enhanced_observation else '194维基础观察'}")
+    
     envs = gym.vector.AsyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, use_enhanced_observation) for i in range(args.num_envs)]
     ) 
     
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), \
