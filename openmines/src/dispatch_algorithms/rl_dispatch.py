@@ -26,7 +26,7 @@ class ObservationConfig:
     """观察配置类"""
     def __init__(self):
         self.use_enhanced_observation = False
-        self.max_tracked_trucks = 10
+        self.max_tracked_trucks = None  # None表示跟踪所有车辆
         self.include_truck_positions = True
         self.include_movement_directions = True
         self.include_eta_predictions = True
@@ -120,7 +120,7 @@ class RLDispatcher(BaseDispatcher):
             # 2: 把当前输出值送进去agent，等待agent决策
             try:
                 mine.mine_logger.debug(f"PUTTING {truck.name} at {mine.env.now}")
-                self.obs_queue.put(out, timeout=5)  # 将观察值放入队列  
+                self.obs_queue.put(out, timeout=5) 
 
             except Full:
                 mine.mine_logger.error("Observation queue is full. Possible deadlock.")
@@ -131,7 +131,7 @@ class RLDispatcher(BaseDispatcher):
             if remaining_time <= 0:
                 raise TimeoutError("Timeout occurred before getting action")
 
-            action = self.act_queue.get()  # 从队列中获取动作.这里不设置超时。
+            action = self.act_queue.get()  # 从队列中获取动作.这里不设置超时。此处对应的是主进程的第一个self.act_queue.put(action)
             mine.mine_logger.debug(f"RECEIVED order of {truck.name} at {mine.env.now}, action is {action}")  # debug
             # self.last_reward = self._get_reward(mine=mine, truck=truck, action=action, dense=True)  # 预估当前决策的奖励，下一步作为reward返回
             self.update_order_info(truck, mine, action)  # 记录当前订单信息
@@ -560,10 +560,7 @@ class RLDispatcher(BaseDispatcher):
 
     def _get_enhanced_observation(self, truck: Truck, mine: Mine) -> dict:
         """
-        获取增强的观察信息（包含其他车辆详细信息）
-        :param truck: 当前卡车
-        :param mine: 矿山对象
-        :return: 增强的观察字典
+        将获取的其他车辆的观察信息和原有的观察信息合并，可以送进去给模型
         """
         # 获取原始观察
         base_observation = self._get_observation(truck, mine)
@@ -578,12 +575,6 @@ class RLDispatcher(BaseDispatcher):
         return enhanced_observation
 
     def _get_other_trucks_detailed_info(self, current_truck: Truck, mine: Mine) -> dict:
-        """
-        获取其他车辆的详细信息
-        :param current_truck: 当前决策的卡车
-        :param mine: 矿山对象
-        :return: 包含其他车辆详细信息的字典
-        """
         other_trucks_info = {
             "detailed_positions": [],
             "movement_directions": [],
@@ -592,14 +583,13 @@ class RLDispatcher(BaseDispatcher):
         }
         
         for truck in mine.trucks:
-            if truck.name == current_truck.name:
+            if truck.name == current_truck.name: # 如果是当前观测的卡车则退出（因为我们要测的是其他卡车）
                 continue
                 
-            # 获取详细位置信息
-            detailed_pos = self._get_truck_detailed_position(truck)
-            movement_dir = self._get_truck_movement_direction(truck)
-            progress_state = self._calculate_truck_road_progress(truck, mine)
-            eta_pred = self._predict_truck_eta(truck, mine)
+            detailed_pos = self._get_truck_detailed_position(truck) # 每辆车的详细位置
+            movement_dir = self._get_truck_movement_direction(truck) # 每辆车的移动方向
+            progress_state = self._calculate_truck_road_progress(truck, mine)  # 每辆车的实时进度
+            eta_pred = self._predict_truck_eta(truck, mine)  # 预计到达时间
             
             other_trucks_info["detailed_positions"].append(detailed_pos)
             other_trucks_info["movement_directions"].append(movement_dir)
@@ -608,10 +598,8 @@ class RLDispatcher(BaseDispatcher):
         
         return other_trucks_info
 
-    def _get_truck_detailed_position(self, truck: Truck) -> dict:
-        """获取单个卡车的详细位置信息"""
-        # 如果车辆正在移动，位置应该表示为"在路上"而不是起始位置
-        if truck.status == "moving" and truck.target_location:
+    def _get_truck_detailed_position(self, truck: Truck) -> dict: # 这个函数只返回模棱两可的状态信息，而不是真正的位置/后面可能删了
+        if truck.status == "moving" and truck.target_location: # 如果车辆在移动，则位置名称被赋值为目标点，位置状态是在路上
             location_name = f"road_to_{truck.target_location.name}"
             location_type = "road"
         else:
@@ -624,11 +612,11 @@ class RLDispatcher(BaseDispatcher):
             "current_location_type": location_type,
             "target_location_type": self._get_location_type(truck.target_location),
             "status": truck.status,
-            "load_ratio": truck.truck_load / truck.truck_capacity if truck.truck_capacity > 0 else 0.0
+            "load_ratio": truck.truck_load / truck.truck_capacity if truck.truck_capacity > 0 else 0.0,
+            "real_time_progress": truck.current_progress  # 新增：实时进度
         }
 
     def _get_truck_movement_direction(self, truck: Truck) -> str:
-        """获取卡车的移动方向类型"""
         if truck.status != "moving" or not truck.target_location:
             return "stationary"
         
@@ -636,31 +624,25 @@ class RLDispatcher(BaseDispatcher):
         target_type = self._get_location_type(truck.target_location)
         
         if current_type == "charging" and target_type == "load":
-            return "init"
+            base_dir = "init"
         elif current_type == "load" and target_type == "dump":
-            return "haul"  
+            base_dir = "haul"
         elif current_type == "dump" and target_type == "load":
-            return "unhaul"
+            base_dir = "unhaul"
         else:
-            return "unknown"
+            base_dir = "unknown"
+        
+        if truck.current_progress > 0.9:
+            return f"{base_dir}_arriving"
+        return base_dir
 
-    def _calculate_truck_road_progress(self, truck: Truck, mine: Mine) -> dict:
-        """计算卡车在道路上的进度"""
+    def _calculate_truck_road_progress(self, truck: Truck, mine: Mine) -> dict: # 返回当前实时进度、剩余距离、总距离信息
         if truck.status != "moving" or not truck.target_location:
             return {"progress_ratio": 0.0, "remaining_distance": 0.0, "total_distance": 0.0}
         
-        # 获取总距离
-        total_distance = self._get_road_distance(truck.current_location, truck.target_location, mine)
-        
-        # 计算进度（这里需要根据实际的移动时间计算）
-        if hasattr(truck, 'movement_start_time') and truck.movement_start_time is not None:
-            elapsed_time = mine.env.now - truck.movement_start_time
-            expected_travel_time = total_distance * 60 / truck.truck_speed  # 转换为分钟
-            progress_ratio = min(elapsed_time / expected_travel_time, 1.0) if expected_travel_time > 0 else 0.0
-        else:
-            progress_ratio = 0.0
-        
-        remaining_distance = total_distance * (1 - progress_ratio)
+        total_distance = self._get_road_distance(truck.current_location, truck.target_location, mine) # 获取总距离
+        progress_ratio = truck.current_progress  # 当前实时进度
+        remaining_distance = total_distance * (1 - progress_ratio) # 计算剩余距离
         
         return {
             "progress_ratio": progress_ratio,
@@ -669,7 +651,6 @@ class RLDispatcher(BaseDispatcher):
         }
 
     def _predict_truck_eta(self, truck: Truck, mine: Mine) -> dict:
-        """预测卡车到达目标的时间"""
         if truck.status != "moving" or not truck.target_location:
             return {"eta_minutes": 0.0, "eta_absolute_time": mine.env.now}
         

@@ -51,9 +51,9 @@ class Args:
 
     # Algorithm-specific arguments
     env_id: str = "mine/Mine-v1"
-    mine_config: str = "src/conf/north_pit_mine.json"
+    mine_config: str = "/home/chengrongxian/git/MineDisaptcher-openmines/openmines/src/conf/north_pit_mine.json"
     total_timesteps: int = 10000000
-    use_enhanced_observation: bool = True  # 是否使用384维增强观察
+    use_enhanced_observation: bool = True  # 是否使用增强观察（跟踪所有车辆）
 
     # ------ 以下是目标超参数 ------
     learning_rate: float = 0.002275497790550207
@@ -65,7 +65,7 @@ class Args:
     max_grad_norm: float = 0.363605168165705
 
     # 其余保持不变
-    num_envs: int = 50
+    num_envs: int = 4  # 减少到4个环境进行测试
     num_steps: int = 1400
     anneal_lr: bool = True
     norm_adv: bool = True
@@ -104,22 +104,28 @@ class Args:
     """正则化模式选择: reward_norm - 使用预计算的统计值正则化reward, return_norm - 对每个batch的returns进行在线正则化"""
 
     # 添加norm_path参数
-    norm_path: Optional[str] = r"C:\Users\95718\Desktop\vscode\MineDisaptcher-openmines\datasets\dispatch_data_20250911_224333\normalization_params.json"
+    norm_path: Optional[str] = None  # 如果不指定，将自动生成或使用当前目录下的normalization_params.json
     """正则化参数文件的路径，如果不指定则使用默认路径或重新生成"""
     # 默认路径就是当前工作目录，即运行脚本时所在的目录。程序会在这个目录下查找名为 normalization_params.json 的文件
 
 
 def make_env(env_id, idx, capture_video, run_name, use_enhanced_observation=True):
     def thunk():
-        if capture_video and idx == 0:
-            env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array", 
-                          use_enhanced_observation=use_enhanced_observation)
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = gym.make(env_id, config_file=args.mine_config, 
-                          use_enhanced_observation=use_enhanced_observation) # 使用配置文件初始化环境，具体在rl_env.py中;默认专家算法为sug_dispatcher:str="ShortestTripDispatcher"
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        return env
+        print(f"正在创建环境 {idx}...")
+        try:
+            if capture_video and idx == 0:
+                env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array")
+                env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
+            else:
+                env = gym.make(env_id, config_file=args.mine_config)
+            # 设置增强观察
+            env.unwrapped.use_enhanced_observation = use_enhanced_observation
+            env = gym.wrappers.RecordEpisodeStatistics(env)
+            print(f"环境 {idx} 创建成功!")
+            return env
+        except Exception as e:
+            print(f"环境 {idx} 创建失败: {e}")
+            raise
     return thunk
 
 
@@ -381,19 +387,11 @@ def manage_normalization_params(args: Optional[Args] = None) -> str:
     # 如果没有指定norm_path或文件不存在，继续原有的逻辑
     param_file_name = "normalization_params.json"
     
-    # 1. 检查指定路径或当前目录是否存在参数文件
+    # 1. 检查当前目录是否存在参数文件
     param_file_path = None
-    if args and args.mine_config:
-        if os.path.isfile(args.mine_config):
-            param_file_path = args.mine_config
-        else:
-            print(f"指定的参数文件不存在: {args.mine_config}")
-    
-    # 检查当前目录
-    if param_file_path is None:
-        cwd_param_file = os.path.join(os.getcwd(), param_file_name)
-        if os.path.isfile(cwd_param_file):
-            param_file_path = cwd_param_file
+    cwd_param_file = os.path.join(os.getcwd(), param_file_name)
+    if os.path.isfile(cwd_param_file):
+        param_file_path = cwd_param_file
     
     # 2. 如果找到文件，询问用户是否使用（带10秒倒计时）
     use_existing_file = False
@@ -572,20 +570,25 @@ if __name__ == "__main__":
     # AsyncVectorEnv 是Gymnasium提供的 异步向量化环境 ，它的同步机制是并行执行，
     # 主进程调用 envs.step() 时会等待所有50个环境都完成当前步骤
     # 所有环境完成后，一次性返回50个环境的观察、奖励、终止状态等
-    # 控制是否使用384维增强观察
+    # 控制是否使用增强观察（跟踪所有车辆）
     use_enhanced_observation = args.use_enhanced_observation
-    print(f"训练配置: 使用{'384维增强观察' if use_enhanced_observation else '194维基础观察'}")
+    print(f"训练配置: 使用{'增强观察（跟踪所有车辆）' if use_enhanced_observation else '194维基础观察'}")
     
+    print(f"正在创建 {args.num_envs} 个并行环境...")
     envs = gym.vector.AsyncVectorEnv(
         [make_env(args.env_id, i, args.capture_video, run_name, use_enhanced_observation) for i in range(args.num_envs)]
-    ) 
+    )
+    print("环境创建完成!") 
     
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), \
         "only discrete action space is supported"
 
     # 使用正则化参数管理函数，传递args以获取env_id和配置信息
+    print("正在加载正则化参数...")
     norm_path = manage_normalization_params(args=args) # 找到使用的正则化参数文件
+    print("正在创建智能体...")
     agent = Agent(envs=envs, args=args, norm_path=norm_path).to(device) # 创建智能体，具体在Agent类中
+    print("智能体创建完成!")
 
     # 使用指定learning rate
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
@@ -622,10 +625,12 @@ if __name__ == "__main__":
     start_time = time.time()
     latest_produce_tons = 0.0
 
+    print(f"正在重置 {args.num_envs} 个环境...")
     env_seeds = [random.randint(0, 2 ** 31 - 1) for _ in range(args.num_envs)]
     next_obs, infos = envs.reset(seed=env_seeds) # 重置环境，具体在rl_env.py中
     next_obs = torch.FloatTensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs, device=device)
+    print("环境重置完成，开始训练循环！")
 
     enable_guide = True
 
@@ -638,10 +643,14 @@ if __name__ == "__main__":
 
     max_avg_tons = 0
     avg_tons = 0
+    print(f"开始训练，总迭代次数: {args.num_iterations}")
     for iteration in range(start_iteration + 1, args.num_iterations + 1):
         # iteration 本质上是PPO算法的训练周期单位，每个iteration代表一次完整的"经验收集→策略优化"循环
         # 由函数开头计算得出，是训练的迭代次数
         # 以下为数据收集的过程，实际上也是在做决策的过程（前面创建环境已经启动了实验），决策的过程中收集数据
+        
+        if iteration % 10 == 1 or iteration <= 5:  # 前5次和每10次打印一次
+            print(f"开始第 {iteration}/{args.num_iterations} 次迭代...")
         
         # 1) Learning rate annealing - 使用更温和的衰减
         if args.anneal_lr:
@@ -688,7 +697,7 @@ if __name__ == "__main__":
                 }
             )
 
-        for step in range(args.num_steps): # 对于每轮迭代中应该满足的步数
+        for step in range(args.num_steps): # 对于每轮迭代中应该满足的步数，先收集完一轮再优化模型
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
@@ -699,7 +708,7 @@ if __name__ == "__main__":
                 # 获取agent的动作
                 action, logprob, _, value, _ = agent.get_action_and_value(
                     next_obs, sug_action=current_sug_action
-                )
+                ) # 基于下一个状态量和建议动作进行决策，此处的状态量即为预处理后的观测量
                 values[step] = value.flatten()
 
             actions[step] = action

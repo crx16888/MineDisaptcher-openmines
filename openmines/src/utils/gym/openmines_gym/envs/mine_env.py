@@ -1,21 +1,25 @@
 import gymnasium as gym
-from docutils.utils.math.tex2unichar import space
 from gymnasium import spaces
 import numpy as np
 import json
 import multiprocessing
 from multiprocessing import Queue
-import logging
-import pathlib
 import threading
 from typing import Optional, Dict, Any
 import importlib
 import pkgutil
-import re
 import inflection
 
 from openmines.src.utils.rl_env import prepare_env
 from openmines.src.utils.feature_processing import preprocess_observation_auto
+
+
+def calculate_total_trucks(config):
+    """计算配置文件中的总卡车数量"""
+    total_trucks = 0
+    for truck_config in config['charging_site']['trucks']:
+        total_trucks += truck_config['count']
+    return total_trucks
 
 
 def get_dispatcher_class(sug_dispatcher):
@@ -82,53 +86,23 @@ class GymMineEnv(gym.Env):
         self.action_space = spaces.Discrete(max_choices)
         road_n = self.load_site_n * self.dump_site_n * 2 + self.load_site_n
         site_n = self.load_site_n + self.dump_site_n
-        # 观察空间：根据配置选择维度
+        # 观察空间：根据配置动态计算维度
         if use_enhanced_observation:
-            obs_dim = 384  # 基础194维 + 增强190维
+            # 计算实际的车辆数量
+            total_trucks = calculate_total_trucks(self.config)
+            # 基础154维 + (总车辆数-1) × 4维每车（极简特征）
+            other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
+            obs_dim = 154 + other_trucks_dim
+            print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
-            obs_dim = 194  # 基础观察
+            obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
             
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(obs_dim,), dtype=np.float32)
-        #
-        #     (
-        #     spaces.Dict({
-        #     # 车辆状态
-        #     "the_truck_status": spaces.Dict({
-        #         "truck_location_index": spaces.Box(low=0, high=np.inf, shape=(1 + site_n,), dtype=np.float32),
-        #         "truck_load": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #         "truck_capacity": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #         "truck_cycle_time": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #         "truck_speed": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #     }),
-        #     # 目标状态
-        #     "target_status": spaces.Dict({
-        #         "queue_lengths": spaces.Box(low=0, high=np.inf, shape=(site_n,), dtype=np.float32),  # 假设最多10个目标
-        #         "capacities": spaces.Box(low=0, high=np.inf, shape=(site_n,), dtype=np.float32),
-        #         "est_wait": spaces.Box(low=0, high=np.inf, shape=(site_n,), dtype=np.float32),
-        #         "produced_tons": spaces.Box(low=0, high=np.inf, shape=(site_n,), dtype=np.float32),
-        #         "service_counts": spaces.Box(low=0, high=np.inf, shape=(site_n,), dtype=np.float32),
-        #     }),
-        #     # ROAD
-        #     "cur_road_status": spaces.Dict({
-        #         "oh_truck_count": spaces.Box(low=0, high=np.inf, shape=(road_n,), dtype=np.float32),
-        #         "oh_distances":spaces.Box(low=0, high=np.inf, shape=(road_n,), dtype=np.float32),
-        #         "oh_truck_jam_count": spaces.Box(low=0, high=np.inf, shape=(road_n,), dtype=np.float32),
-        #         "oh_repair_count":spaces.Box(low=0, high=np.inf, shape=(road_n,), dtype=np.float32),
-        #     }),
-        #
-        #     # 事件信息
-        #     "event_name": spaces.Discrete(3),  # init, haul, unhaul
-        #     # 矿山状态
-        #     "mine_status": spaces.Dict({
-        #         "truck_count": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #         "total_production": spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
-        #     })
-        # }))
 
         # 初始化通信队列和进程
         self.obs_queue = None
         self.act_queue = None
-        self.process = None
+        self.process = None  
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None) -> tuple[Any, dict[str, Any]]:
         """重置环境到初始状态"""
@@ -227,11 +201,16 @@ class ThreadMineEnv(gym.Env):
         )
         self.action_space = spaces.Discrete(max_choices)
 
-        # 观察空间：根据配置选择维度
+        # 观察空间：根据配置动态计算维度
         if use_enhanced_observation:
-            obs_dim = 384  # 基础194维 + 增强190维
+            # 计算实际的车辆数量
+            total_trucks = calculate_total_trucks(self.config)
+            # 基础154维 + (总车辆数-1) × 4维每车（极简特征）
+            other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
+            obs_dim = 154 + other_trucks_dim
+            print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
-            obs_dim = 194  # 基础观察
+            obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
             
         self.observation_space = spaces.Box(
             low=0,
@@ -385,68 +364,3 @@ class GymMineSparseEnv(GymMineEnv):
     """稀疏奖励的单线程矿山环境"""
     def __init__(self, config_file, sug_dispatcher:str="ShortestTripDispatcher", seed=42, log=False, ticks=False):
         super().__init__(config_file=config_file, reward_mode="sparse", sug_dispatcher=sug_dispatcher, seed=seed, log=log, ticks=ticks)
-
-
-
-# 使用示例
-if __name__ == "__main__":
-    """
-    THREAD MINE: dense(default)
-    """
-    # 创建环境
-    env = ThreadMineEnv("../../../../conf/north_pit_mine.json", 
-                        sug_dispatcher="NaiveDispatcher",
-                         log=False, ticks=False)
-    # 添加episode统计包装器
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    # 测试环境
-    observation, info = env.reset(seed=42)
-    for i in range(2000):
-        # action = env.action_space.sample()  # 随机动作
-        action = info["sug_action"]  # 使用info中的建议动作
-        print(f"A_{i} Action: {action}")
-        observation, reward, terminated, truncated, info = env.step(action)
-        print(f"Step: {i}, Reward: {reward}, Info: {info} terminated: {terminated}, truncated: {truncated}")
-        if terminated or truncated:
-            observation, info = env.reset()
-            break
-    env.close()
-    """
-    GYM IMPORT MINES
-    """
-    import openmines_gym
-    import gymnasium as gym
-    
-    # 测试dense环境
-    env = gym.make('mine/Mine-v1-dense', config_file="../../../../conf/north_pit_mine.json",
-                   sug_dispatcher="NaiveDispatcher", log=False, ticks=False)
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    
-    observation, info = env.reset(seed=42)
-    for i in range(1000):
-        action = info["sug_action"]  # 使用建议动作
-        print(f"Dense Step {i}, Action: {action}")
-        observation, reward, terminated, truncated, info = env.step(action)
-        print(f"Dense Step {i}, Reward: {reward}, Info: {info}")
-        if terminated or truncated:
-            print("Dense Environment terminated!")
-            observation, info = env.reset()
-            break
-    env.close()
-    
-    # 测试sparse环境
-    env = gym.make('mine/Mine-v1-sparse', config_file="../../../../conf/north_pit_mine.json",
-                   sug_dispatcher="NaiveDispatcher", log=False, ticks=False)
-    env = gym.wrappers.RecordEpisodeStatistics(env)
-    
-    observation, info = env.reset(seed=42)
-    for i in range(1000):
-        action = info["sug_action"]  # 使用建议动作
-        print(f"Sparse Step {i}, Action: {action}")
-        observation, reward, terminated, truncated, info = env.step(action)
-        print(f"Sparse Step {i}, Reward: {reward}, Info: {info}")
-        if terminated or truncated:
-            print("Sparse Environment terminated!")
-            observation, info = env.reset()
-            break
-    env.close()

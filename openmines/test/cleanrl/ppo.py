@@ -40,7 +40,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "mine/Mine-v1"   # mine/Mine-v0(multiprocessing, SyncVectorEnv) mine/Mine-v1(threading, AsyncVectorEnv)
     """the id of the environment"""
-    mine_config: str = "../../src/conf/north_pit_mine.json"
+    mine_config: str = "/home/chengrongxian/git/MineDisaptcher-openmines/openmines/src/conf/north_pit_mine.json"
     """the config file of the mine environment"""
     total_timesteps: int = 5000000
     """total timesteps of the experiments"""
@@ -111,10 +111,10 @@ class Args:
 def make_env(env_id, idx, capture_video, run_name):
     def thunk():
         if capture_video and idx == 0:
-            env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array")
+            env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array", use_enhanced_observation=True)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
-            env = gym.make(env_id, config_file=args.mine_config)
+            env = gym.make(env_id, config_file=args.mine_config, use_enhanced_observation=True)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         return env
 
@@ -136,7 +136,7 @@ class Agent(nn.Module):
         self.max_action_dim = max(self.load_sites_num, self.dump_sites_num)
 
         # 获取观察空间的维度
-        self.obs_shape = 194  #212 #@self._get_obs_shape(212)
+        self.obs_shape = 384  # 使用增强观察空间（194基础 + 190增强）
 
         # 共享特征提取层
         self.shared_net = nn.Sequential(

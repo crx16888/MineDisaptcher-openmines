@@ -77,6 +77,7 @@ class Truck:
         self.first_order_time = 0
         # RL
         self.current_decision_event = None
+        self.current_progress = 0.0  # Real-time progress on current journey (0-1)
 
     def get_location_onehot(self):
         """获取车辆当前地点的标号, one-hot
@@ -105,93 +106,52 @@ class Truck:
         self.env = mine.env
         self.dispatcher = mine.dispatcher
 
-    def move(self, target_location, distance:float, manual_speed:float=None):
-        """
-        移动函数 需要区分满载和空载
-        :param target_location:
-        :param distance:
-        :param manual_speed:
-        :return:
-        """
+    def move(self, target_location, distance:float, manual_speed:float=None): # 目标点、距离、速度
         assert target_location is not None, "target_location can not be None"
         assert target_location is not self.current_location, "target_location can not be the same as current_location"
         assert distance >= 0, "distance can not be negative"
         assert self.truck_speed > 0, "truck_speed can not be negative"
+        
         # 记录当前路程的信息
         self.target_location = target_location
-        self.journey_start_time = self.env.now
-        if manual_speed is not None:
-            assert manual_speed > 0, "manual_speed can not be negative"
-            duration = (distance / manual_speed)*60  # in minutes
-        else:
-            duration = (distance / self.truck_speed)*60
-        self.truck_speed = manual_speed if manual_speed is not None else self.truck_speed
-
-        """
-        1.车辆维修随机事件的模拟        
-        """
-        # 检查车辆是否发生故障并获得维修时间
-        repair_time = self.check_vehicle_availability()
-        if repair_time:
-            # 如果发生故障，记录故障事件并进行维修
+        self.journey_start_time = self.env.now # 当移动事件触发时先记录当前时间
+        speed = manual_speed if manual_speed is not None else self.truck_speed
+        total_duration = (distance / speed) * 60  # 理想情况下到达终点所需要的时间
+        
+        # 检查初始维修时间
+        repair_time = self.check_vehicle_availability() # 检查当前车辆是否需要维修
+        if repair_time: # 如果有维修时间
+            # 创建一个故障事件包含各种信息
             breakdown_event = Event(self.last_breakdown_time, "TruckEvent:breakdown", f'Time:<{self.last_breakdown_time}> Truck:[{self.name}] breakdown for {repair_time} minutes',
                       info={"name": self.name, "status": "breakdown",
                             "repair_time": repair_time,
                             "start_location": self.current_location.name,
                             "target_location": self.target_location.name,
                             "start_time": self.last_breakdown_time, "end_time": self.last_breakdown_time + repair_time})
+            # 将故障事件添加到事件池中等
             self.event_pool.add_event(breakdown_event)
             self.mine.random_event_pool.add_event(breakdown_event)
             self.logger.info(f'Time:<{self.last_breakdown_time}> Truck:[{self.name}] breakdown for {repair_time} minutes at {self.last_breakdown_time}')
-            # 进行维修（暂停运行）
             self.status = "repairing"
+            # 陷入睡眠，让模拟环境等待这么长时间
             yield self.env.timeout(repair_time)
             self.repair_time = 0
             self.status = "moving"
-        """
-        2.车辆运行过程中的堵车随机事件模拟
-        """
-        # 分析当前道路中的车辆情况，并随机生成一个延迟时间用来模拟交通堵塞
-        # 读取已经存在的堵车事件
-        jam_events = self.mine.random_event_pool.get_even_by_type("RoadEvent:jam")
-        pre_jam_time = 0
-        pre_jam_count = 0
-        for jam_event in jam_events:
-            """
-            info={"name": self.name, "status": "jam", "speed": 0,
-                                                  "start_location": self.current_location.name,
-                                                    "end_location": self.target_location.name,
-                                                    "jam_position": jam_position,
-                                                  "start_time": self.env.now, "est_end_time":
-            """
-            if jam_event.info["start_location"] == self.current_location.name and jam_event.info["end_location"] == self.target_location.name \
-                    and jam_event.info["start_time"] <= self.env.now and jam_event.info["est_end_time"] >= self.env.now:
-                jam_time = jam_event.info["est_end_time"] - self.env.now  # 在车辆出发的这一刻，堵车事件还会持续的时间长度
-                jam_position = jam_event.info["jam_position"]
-                time_to_jam = jam_position * duration  # 车辆到达堵车区域的时间
-                pre_jam_time += max(0, jam_time - time_to_jam)
-                pre_jam_count += 1
-                self.pre_jam_time = pre_jam_time
-        if pre_jam_count > 0:
-            self.logger.info(f"Time:<{self.env.now}> Truck:[{self.name}] is facing {pre_jam_time} mins delay caused by {pre_jam_count} pre-existing jam events on Road from {self.current_location.name} to {self.target_location.name}")
-
-        """
-        3.车辆完全损坏的模拟(当车辆完全损坏就会被移除,车辆到指定时间后不会再发生移动，而是停留在原地
-        """
-        if repair_time is None:
-            self.logger.info(f"Time:<{self.last_breakdown_time}> Truck:[{self.name}] is broken down and beyond repair at {self.current_location.name} to "
-                             f"{self.target_location.name}")
-            unrepairable_event = Event(self.env.now, "TruckEvent:unrepairable", f'Time:<{self.env.now}> Truck:[{self.name}] is broken down and beyond repair'
-                                                                     f' at {self.current_location.name} to '
-                                                                        f'{self.target_location.name}',
-                                        info={"name": self.name, "status": "unrepairable","time": self.env.now})
+        
+        if repair_time is None: # 如果没有维修时间
+            self.logger.info(f"Time:<{self.last_breakdown_time}> Truck:[{self.name}] is broken down and beyond repair at {self.current_location.name} to {self.target_location.name}")
+            unrepairable_event = Event(self.env.now, "TruckEvent:unrepairable", f'Time:<{self.env.now}> Truck:[{self.name}] is broken down and beyond repair at {self.current_location.name} to {self.target_location.name}',
+                        info={"name": self.name, "status": "unrepairable","time": self.env.now})
             self.event_pool.add_event(unrepairable_event)
             self.mine.random_event_pool.add_event(unrepairable_event)
             self.status = "unrepairable"
             return
-        """
-        4.车辆移动前往目的地的模拟
-        """
+        
+        # 新：分解移动成小步（步长1分钟）
+        step_duration = 1.0  # 每1分钟记录一次事件信息，可配置
+        num_steps = int(np.ceil(total_duration / step_duration))
+        step_distance = distance / num_steps # 每一步的距离，用于计算进度
+        
         # 判断目标地点的类型
         if isinstance(self.current_location, DumpSite) and isinstance(target_location, LoadSite):
             event_name = "unhaul"
@@ -199,23 +159,58 @@ class Truck:
             event_name = "init"
         else:
             event_name = "haul"
-
+        
         self.event_pool.add_event(Event(self.env.now, event_name, f'Truck:[{self.name}] moves at {target_location.name}',
-                                        info={"name": self.name, "status": event_name, "speed": manual_speed if manual_speed is not None else self.truck_speed,
-                                              "start_time": self.env.now, "est_end_time": self.env.now + duration + pre_jam_time, "end_time": None,
+                                        info={"name": self.name, "status": event_name, "speed": speed,
+                                              "start_time": self.env.now, "est_end_time": self.env.now + total_duration, "end_time": None,
                                               "start_location": self.current_location.name,
                                               "target_location": target_location.name,
                                               "distance": distance, "duration": None}))
+        
+        self.current_progress = 0.0  # 重置进度
         self.status = "moving"
-        yield self.env.timeout(duration + pre_jam_time)
-        # 补全数据
+        
+        for step in range(num_steps):
+            # 计算本步内的堵车时间
+            step_jam_time = 0.0
+            current_step_start = self.env.now  # 本步开始时间（注意：env.now在yield前不变，需要跟踪）
+            current_step_end = current_step_start + step_duration  # 预计结束
+            
+            # 遍历当前道路的堵车事件
+            jam_events = self.mine.random_event_pool.get_even_by_type("RoadEvent:jam")
+            for jam_event in jam_events:
+                if (jam_event.info["start_location"] == self.current_location.name and
+                    jam_event.info["end_location"] == self.target_location.name):
+                    jam_start = jam_event.info["start_time"]
+                    jam_end = jam_event.info.get("est_end_time", current_step_end)
+                    
+                    # 计算与本步的重叠时间
+                    overlap_start = max(current_step_start, jam_start)
+                    overlap_end = min(current_step_end, jam_end)
+                    if overlap_start < overlap_end:
+                        step_jam_time += (overlap_end - overlap_start)
+            
+            # 检查维修
+            step_repair_time = self.check_vehicle_availability() or 0
+            
+            # 更新进度
+            self.current_progress = min(self.current_progress + (step_distance / distance), 1.0)
+            
+            # 模拟流逝这段路程的理想时间+堵车时间+维修时间（实际上它也不知道是不是真的到站点了，它只是估算时间，这只是种模拟）
+            yield self.env.timeout(step_duration + step_jam_time + step_repair_time)
+            
+            # 可选：记录本步事件
+            self.logger.debug(f"Step {step}: jam={step_jam_time}, repair={step_repair_time}, progress={self.current_progress}")
+
+        # 移动结束
+        self.current_location = target_location
+        self.current_progress = 0.0  # 重置
+        self.pre_jam_time = 0
+        
+        # 补全事件数据
         last_move_event = self.event_pool.get_last_event(type=event_name, strict=True)
         last_move_event.info["end_time"] = self.env.now
         last_move_event.info["duration"] = self.env.now - last_move_event.info["start_time"]
-        # after arrival set current location
-        assert type(self.current_location) != type(target_location), f"current_site and target_site should not be the same type of site "
-        self.current_location = target_location
-        self.pre_jam_time = 0
 
     def load(self, shovel:Shovel):
         shovel_tons = shovel.shovel_tons

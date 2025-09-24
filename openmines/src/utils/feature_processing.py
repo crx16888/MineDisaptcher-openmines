@@ -91,19 +91,19 @@ def preprocess_observation(observation, max_sim_time):
     return state.astype(np.float32)
 
 
-def preprocess_enhanced_observation(observation, max_sim_time, max_tracked_trucks=10):
+def preprocess_enhanced_observation(observation, max_sim_time, max_tracked_trucks=None):
     """
     处理包含其他车辆详细信息的增强观察
     :param observation: 增强观察字典
     :param max_sim_time: 最大仿真时间
-    :param max_tracked_trucks: 最大跟踪车辆数
+    :param max_tracked_trucks: 最大跟踪车辆数，如果为None则追踪所有车辆
     :return: 扩展的特征向量
     """
-    # 获取基础特征（原有的194维）
+    # 获取基础特征（原有的154维）
     base_features = preprocess_observation(observation, max_sim_time)
     
-    # 处理其他车辆详细信息
-    other_trucks_features = _process_other_trucks_detailed(
+    # 处理其他车辆简化信息
+    other_trucks_features = _process_other_trucks_simplified(
         observation.get("other_trucks_detailed", {}), 
         max_tracked_trucks
     )
@@ -113,90 +113,146 @@ def preprocess_enhanced_observation(observation, max_sim_time, max_tracked_truck
     return enhanced_features.astype(np.float32)
 
 
-def _process_other_trucks_detailed(other_trucks_info: dict, max_tracked_trucks: int) -> np.ndarray:
-    """处理其他车辆的详细信息"""
+def _process_other_trucks_simplified(other_trucks_info: dict, max_tracked_trucks=None) -> np.ndarray:
+    """处理其他车辆的简化信息 - 支持所有车辆跟踪"""
     detailed_positions = other_trucks_info.get("detailed_positions", [])
     movement_directions = other_trucks_info.get("movement_directions", [])
     progress_states = other_trucks_info.get("progress_states", [])
     eta_predictions = other_trucks_info.get("eta_predictions", [])
     
+    # 如果没有指定最大跟踪数量，则处理所有可用的车辆
+    if max_tracked_trucks is None:
+        actual_truck_count = len(detailed_positions)
+    else:
+        actual_truck_count = min(max_tracked_trucks, len(detailed_positions))
+    
     all_truck_features = []
     
-    for i in range(max_tracked_trucks):
-        if i < len(detailed_positions):
-            # 处理单个车辆的特征
-            truck_features = _encode_single_truck_features(
-                detailed_positions[i],
-                movement_directions[i],
-                progress_states[i],
-                eta_predictions[i]
-            )
-        else:
-            # 填充零向量
-            truck_features = np.zeros(19)  # 每辆车19维特征
-        
+    # 处理实际存在的车辆
+    for i in range(actual_truck_count):
+        truck_features = _encode_single_truck_simplified(
+            detailed_positions[i],
+            movement_directions[i],
+            progress_states[i],
+            eta_predictions[i]
+        )
         all_truck_features.extend(truck_features)
+    
+    # 如果指定了最大跟踪数量且实际车辆数少于该数量，则用零向量填充
+    if max_tracked_trucks is not None and actual_truck_count < max_tracked_trucks:
+        for i in range(max_tracked_trucks - actual_truck_count):
+            truck_features = np.zeros(4)  # 每辆车4维特征
+            all_truck_features.extend(truck_features)
     
     return np.array(all_truck_features)
 
 
-def _encode_single_truck_features(position_info: dict, direction: str, progress: dict, eta: dict) -> np.ndarray:
-    """编码单个车辆的特征"""
-    # 位置编码 (11维 one-hot)
-    location_onehot = _encode_location_name(position_info["current_location_name"])
+
+
+def _encode_single_truck_simplified(position_info: dict, direction: str, progress: dict, eta: dict) -> np.ndarray:
+    """编码单个车辆的精确道路特征 - 包含具体的起点和终点信息"""
     
-    # 方向编码 (4维 one-hot)
-    direction_onehot = _encode_movement_direction(direction)
+    current_location = position_info["current_location_name"]
+    target_location = position_info.get("target_location_name", "")
     
-    # 数值特征 (4维)
-    numerical_features = [
-        position_info["load_ratio"],
-        progress["progress_ratio"],
-        eta["eta_minutes"] / 60.0,  # 标准化为小时
-        1.0 if position_info["status"] == "moving" else 0.0
+    # 获取起点和终点的编号
+    start_id, end_id = _get_road_endpoints(current_location, target_location, direction)
+    
+    # 道路编码 (3维) - 起点ID, 终点ID, 道路类型
+    road_features = [
+        start_id / 10.0,      # 起点ID，正则化到[0,1]
+        end_id / 10.0,        # 终点ID，正则化到[0,1] 
+        _get_road_type_id(direction) / 3.0  # 道路类型ID，正则化到[0,1]
     ]
     
-    return np.concatenate([location_onehot, direction_onehot, numerical_features])
-
-
-def _encode_location_name(location_name: str) -> np.ndarray:
-    """将位置名称编码为one-hot向量"""
-    onehot = np.zeros(11)  # 1充电站+5装载点+5卸载点
+    # 进度信息 (1维)
+    progress_feature = [progress["progress_ratio"]]  # 当前道路行驶进度
     
-    # 处理道路上的情况：road_to_destination
-    if location_name.startswith("road_to_"):
-        destination = location_name.replace("road_to_", "")
-        location_name = destination
-    
-    if "charging" in location_name.lower():
-        onehot[0] = 1.0
-    elif "load_site" in location_name.lower():
-        # 提取装载点编号
-        try:
-            site_num = int(location_name.split('_')[-1])
-            if 1 <= site_num <= 5:
-                onehot[site_num] = 1.0
-        except:
-            pass
-    elif "dump_site" in location_name.lower():
-        # 提取卸载点编号
-        try:
-            site_num = int(location_name.split('_')[-1])
-            if 1 <= site_num <= 5:
-                onehot[5 + site_num] = 1.0
-        except:
-            pass
-    
-    return onehot
+    return np.concatenate([road_features, progress_feature])
 
 
-def _encode_movement_direction(direction: str) -> np.ndarray:
-    """编码移动方向"""
-    direction_map = {"init": 0, "haul": 1, "unhaul": 2, "stationary": 3}
-    onehot = np.zeros(4)
-    if direction in direction_map:
-        onehot[direction_map[direction]] = 1.0
-    return onehot
+def _get_road_endpoints(current_location: str, target_location: str, direction: str) -> tuple:
+    """获取道路的起点和终点ID"""
+    
+    # 站点名称到ID的映射
+    def get_site_id(site_name: str) -> int:
+        if not site_name:
+            return 0
+        
+        # 充电站
+        if "charging" in site_name.lower():
+            return 0
+        
+        # 装载点 (ID: 1-5)
+        if "loadsite1" in site_name.lower() or site_name == "LoadSite1":
+            return 1
+        elif "loadsite2" in site_name.lower():
+            return 2
+        elif "loadsite3" in site_name.lower():
+            return 3
+        elif "loadsite4" in site_name.lower():
+            return 4
+        elif "loadsite5" in site_name.lower():
+            return 5
+        
+        # 卸载点 (ID: 6-10)
+        elif "dumpsite1" in site_name.lower():
+            return 6
+        elif "dumpsite2" in site_name.lower():
+            return 7
+        elif "dumpsite3" in site_name.lower():
+            return 8
+        elif "dumpsite4" in site_name.lower():
+            return 9
+        elif "dumpsite5" in site_name.lower():
+            return 10
+        
+        return 0  # 未知
+    
+    # 如果车辆在路上，从location_name和direction解析
+    if current_location.startswith("road_to_"):
+        # 在路上，target就是终点
+        end_id = get_site_id(target_location)
+        
+        if direction == "init":
+            start_id = 0  # 从充电站出发
+        elif direction == "haul":
+            # 从装载点出发到卸载点，可以从current_location反推起点
+            # 例如：如果去DumpSite3，可能从某个装载点出发
+            # 这里简化：根据终点推断可能的起点
+            if end_id >= 6 and end_id <= 10:  # 确实是去卸载点
+                # 简化假设：平均分配装载点
+                start_id = ((end_id - 6) % 5) + 1  # 卸载点1->装载点1, 卸载点2->装载点2...
+            else:
+                start_id = 1  # 默认装载点1
+        elif direction == "unhaul":
+            # 从卸载点出发到装载点
+            if end_id >= 1 and end_id <= 5:  # 确实是去装载点
+                # 简化假设：根据终点推断起点
+                start_id = (end_id - 1) + 6  # 装载点1->卸载点1, 装载点2->卸载点2...
+            else:
+                start_id = 6  # 默认卸载点1
+        else:
+            start_id = 0  # 未知，默认充电站
+            
+    else:
+        # 车辆在站点，起点就是当前位置
+        start_id = get_site_id(current_location)
+        end_id = get_site_id(target_location)
+    
+    return start_id, end_id
+
+
+def _get_road_type_id(direction: str) -> int:
+    """获取道路类型ID"""
+    if direction == "init":
+        return 1  # 充电站->装载点
+    elif direction == "haul":
+        return 2  # 装载点->卸载点
+    elif direction == "unhaul":
+        return 3  # 卸载点->装载点
+    else:
+        return 0  # 未知
 
 
 def preprocess_observation_auto(observation, max_sim_time):

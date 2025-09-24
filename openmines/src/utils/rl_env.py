@@ -30,11 +30,7 @@ def prepare_env(obs_queue:Queue, act_queue:Queue, config:dict, reward_mode:str =
     """接受mp的输入，然后构建mine和子进程。
     为了兼容windows平台的spawn机制
     因为simpy的env无法序列化，所以必须在子进程中构建mine和simpy的env
-
-    :param obs_queue:
-    :param act_queue:
-    :param total_time:
-    :param use_enhanced_observation: 是否使用384维增强观察
+    输入就有动作队列、是否使用增强观察等
     :return:
     """
     # log_path 为cwd下的logs文件夹
@@ -44,7 +40,7 @@ def prepare_env(obs_queue:Queue, act_queue:Queue, config:dict, reward_mode:str =
     from openmines.src.dispatch_algorithms.rl_dispatch import ObservationConfig
     if use_enhanced_observation:
         observation_config = ObservationConfig.create_enhanced_config()
-        print(f"训练环境: 使用384维增强观察")
+        print(f"训练环境: 使用增强观察（跟踪所有车辆）")
     else:
         observation_config = ObservationConfig.create_basic_config()
         print(f"训练环境: 使用194维基础观察")
@@ -211,11 +207,13 @@ class MineEnv:
 
     def step(self, action):
         # 主进程 ：运行强化学习算法（如PPO），负责决策，子进程 ：运行矿山仿真环境，负责状态更新和奖励计算
-        self.act_queue.put(action) # 从主进程获取动作队列
-        # 主进程阻塞等待子进程的响应，子进程在 `rl_env.py` 的 prepare_env 函数中运行矿山仿真
-        # 子进程通过 mine.start_rl(obs_queue, act_queue, ...) 处理动作并生成响应
-        # 从子进程获取状态队列，out示例如下
-        out = self.obs_queue.get() 
+        self.act_queue.put(action) # act_queue 是主进程 → 子进程的通信通道：主进程 put(action) 放入动作，子进程 get() 获取动作。
+        # 子进程在仿真运行中（mine.start_rl 的 env.run()），当卡车需要决策调度时调用give_init_order等调用rl_dispatch.py中的_step 方法
+        # 在_step 方法中先使用_get_enhanced_observation先获取原始状态，self.obs_queue.put(out, timeout=5)  # 将观察值放入队列送出去给主进程
+        
+        out = self.obs_queue.get() # get() 是阻塞的：如果队列为空，主进程会等待子进程的 put()
+        # 此处对应的是self.obs_queue.put(out, timeout=5)，获取主进程中的观察值
+        # 在step之外（例如训练的代码中马上承接决策下一步的动作，推给子进程，然后子进程再拉取动作执行）
 
         """
         out = {

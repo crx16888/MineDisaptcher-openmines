@@ -448,7 +448,7 @@ class Mine:
         # log in the truck as process
         for truck in self.trucks:
             self.env.process(truck.run())
-        self.env.run(until=total_time)  # 在这里开一个独立的进程用于执行函数，后面大妈
+        self.env.run(until=total_time)  # 在这里开一个独立的进程用于执行函数
 
         # 当模拟结束的时候 最后发送一个ob和done等信息
         ob = self.dispatcher.current_observation

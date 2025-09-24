@@ -2,6 +2,9 @@
 pip install -e . 安装仓库
 openmines run -f ...
 
+1.1 查看训练曲线
+tensorboard --logdir /home/chengrongxian/git/MineDisaptcher-openmines/runs --bind_all
+
 
 2. 上传到仓库：
 git add .
