@@ -207,10 +207,14 @@ class MineEnv:
 
     def step(self, action):
         # 主进程 ：运行强化学习算法（如PPO），负责决策，子进程 ：运行矿山仿真环境，负责状态更新和奖励计算
+
+        # 发送动作到子进程，
         self.act_queue.put(action) # act_queue 是主进程 → 子进程的通信通道：主进程 put(action) 放入动作，子进程 get() 获取动作。
         # 子进程在仿真运行中（mine.start_rl 的 env.run()），当卡车需要决策调度时调用give_init_order等调用rl_dispatch.py中的_step 方法
         # 在_step 方法中先使用_get_enhanced_observation先获取原始状态，self.obs_queue.put(out, timeout=5)  # 将观察值放入队列送出去给主进程
         
+        # 从子进程接收运行完的结果，等待子进程执行完毕获得新的状态
+        # 子进程的实验核心在mine.py的mine.start_rl方法那里
         out = self.obs_queue.get() # get() 是阻塞的：如果队列为空，主进程会等待子进程的 put()
         # 此处对应的是self.obs_queue.put(out, timeout=5)，获取主进程中的观察值
         # 在step之外（例如训练的代码中马上承接决策下一步的动作，推给子进程，然后子进程再拉取动作执行）

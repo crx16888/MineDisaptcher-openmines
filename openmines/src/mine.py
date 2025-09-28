@@ -410,10 +410,11 @@ class Mine:
         self.total_time = total_time
         self.mine_logger.info("simulation started")
         # pass queue to dispatcher
+        # 传入队列给dispatcher，— dispatcher（仿真内部负责调度决策的模块）会直接使用这两条队列与主进程通信。
         self.dispatcher.obs_queue = obs_queue
         self.dispatcher.act_queue = act_queue
 
-        # start some monitor process for summary
+        # start some monitor process for summary，启动各类监控进程
         for load_site in self.load_sites:
             # 对停车场队列的监控
             self.env.process(load_site.parking_lot.monitor_resources(env=self.env,

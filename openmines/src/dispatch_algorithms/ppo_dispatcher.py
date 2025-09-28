@@ -46,24 +46,36 @@ class PPODispatcher(BaseDispatcher):
         # 检查模型目录 - 使用相对路径，从项目根目录开始
         import pathlib
         project_root = pathlib.Path(__file__).parent.parent.parent.parent
-        checkpoints_dir = project_root / "checkpoints" / "mine"
+        checkpoints_base_dir = project_root / "checkpoints"
         
-        if not checkpoints_dir.exists():
-            raise FileNotFoundError(f"Checkpoints directory not found: {checkpoints_dir}")
+        if not checkpoints_base_dir.exists():
+            raise FileNotFoundError(f"Checkpoints directory not found: {checkpoints_base_dir}")
+        
+        # 查找所有可能包含模型的目录
+        model_dirs = []
+        for item in checkpoints_base_dir.iterdir():
+            if item.is_dir() and ('mine' in item.name.lower() or 'ppo' in item.name.lower()):
+                model_dirs.append(item)
         
         # 查找所有model_开头的.pt文件（实际文件名格式）
         model_files = []
-        for root, dirs, files in os.walk(str(checkpoints_dir)):
-            for file in files:
-                if file.startswith('model_') and file.endswith('.pt'):
-                    model_files.append(os.path.join(root, file))
+        for model_dir in model_dirs:
+            for root, dirs, files in os.walk(str(model_dir)):
+                for file in files:
+                    if file.startswith('model_') and file.endswith('.pt'):
+                        model_files.append(os.path.join(root, file))
         
         if not model_files:
-            raise FileNotFoundError(f"No model files found in: {checkpoints_dir}")
+            raise FileNotFoundError(f"No model files found in any checkpoints subdirectory: {checkpoints_base_dir}")
         
         # 按训练时的吨数排序，选择性能最好的
-        model_files.sort(key=lambda x: float(x.split('tons')[1].split('_')[0]), reverse=True)
-        best_model = model_files[0]
+        try:
+            model_files.sort(key=lambda x: float(x.split('tons')[1].split('_')[0]), reverse=True)
+            best_model = model_files[0]
+        except (IndexError, ValueError) as e:
+            # 如果无法按吨数排序，就按文件修改时间排序，选择最新的
+            model_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            best_model = model_files[0]
         
         print(f"自动找到训练时性能最好的模型: {best_model}")
         return best_model
@@ -97,16 +109,21 @@ class PPODispatcher(BaseDispatcher):
         # 设置mine_config路径
         self.args.mine_config = str(project_root / "openmines" / "src" / "conf" / "north_pit_mine.json")
         
-        # 查找正则化参数文件
-        datasets_dir = project_root / "datasets"
+        # 查找正则化参数文件 - 首先检查项目根目录
         norm_path = None
-        if datasets_dir.exists():
-            for dataset_folder in datasets_dir.iterdir():
-                if dataset_folder.is_dir():
-                    norm_file = dataset_folder / "normalization_params.json"
-                    if norm_file.exists():
-                        norm_path = str(norm_file)
-                        break
+        root_norm_file = project_root / "normalization_params.json"
+        if root_norm_file.exists():
+            norm_path = str(root_norm_file)
+        else:
+            # 如果根目录没有，再检查datasets目录
+            datasets_dir = project_root / "datasets"
+            if datasets_dir.exists():
+                for dataset_folder in datasets_dir.iterdir():
+                    if dataset_folder.is_dir():
+                        norm_file = dataset_folder / "normalization_params.json"
+                        if norm_file.exists():
+                            norm_path = str(norm_file)
+                            break
         
         if norm_path is None:
             # 如果找不到正则化参数文件，使用默认路径
