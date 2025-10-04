@@ -51,7 +51,7 @@ class Args:
 
     # Algorithm-specific arguments
     env_id: str = "mine/Mine-v1"
-    mine_config: str = "/home/chengrongxian/git/MineDisaptcher-openmines/openmines/src/conf/north_pit_mine.json"
+    mine_config: str = "openmines/src/conf/north_pit_mine.json"
     total_timesteps: int = 10000000
     use_enhanced_observation: bool = True  # 是否使用增强观察（跟踪所有车辆）
 
@@ -114,12 +114,11 @@ def make_env(env_id, idx, capture_video, run_name, use_enhanced_observation=True
         print(f"正在创建环境 {idx}...")
         try:
             if capture_video and idx == 0:
-                env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array")
+                env = gym.make(env_id, config_file=args.mine_config, render_mode="rgb_array", use_enhanced_observation=use_enhanced_observation)
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
             else:
-                env = gym.make(env_id, config_file=args.mine_config)
-            # 设置增强观察
-            env.unwrapped.use_enhanced_observation = use_enhanced_observation
+                env = gym.make(env_id, config_file=args.mine_config, use_enhanced_observation=use_enhanced_observation)
+            # 增强观察已在初始化时设置，无需再次设置
             env = gym.wrappers.RecordEpisodeStatistics(env)
             print(f"环境 {idx} 创建成功!")
             return env
@@ -384,9 +383,8 @@ def manage_normalization_params(args: Optional[Args] = None) -> str:
         else:
             print(f"警告: 指定的参数文件不存在: {args.norm_path}")
     
-    # 如果没有指定norm_path或文件不存在，继续原有的逻辑
-    param_file_name = "normalization_params.json"
-    
+    param_file_name = "normalization_params.json"  # 使用正则化参数的文件
+  
     # 1. 检查当前目录是否存在参数文件
     param_file_path = None
     cwd_param_file = os.path.join(os.getcwd(), param_file_name)
@@ -630,7 +628,27 @@ if __name__ == "__main__":
     next_obs, infos = envs.reset(seed=env_seeds) # 重置环境，具体在rl_env.py中
     next_obs = torch.FloatTensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs, device=device)
-    print("环境重置完成，开始训练循环！")
+    
+    # ===== 验证观察维度和正则化参数 =====
+    print(f"\n观察空间验证:")
+    print(f"  观察形状: {next_obs.shape}")
+    print(f"  期望维度: ({args.num_envs}, {agent.obs_shape})")
+    assert next_obs.shape[1] == agent.obs_shape, \
+        f"维度不匹配: 实际{next_obs.shape[1]} != 期望{agent.obs_shape}"
+    
+    nonzero_mean = (agent.obs_mean != 0).sum().item()
+    nonzero_std = (agent.obs_std != 1.0).sum().item()
+    print(f"  正则化参数有效性:")
+    print(f"    - {nonzero_mean}/{agent.obs_shape}个非零均值 ({100*nonzero_mean/agent.obs_shape:.1f}%)")
+    print(f"    - {nonzero_std}/{agent.obs_shape}个非1标准差 ({100*nonzero_std/agent.obs_shape:.1f}%)")
+    
+    if nonzero_mean < agent.obs_shape * 0.5:
+        print(f"  ⚠️  警告: 正则化参数可能无效（非零均值比例<50%）")
+        print(f"  建议: 重新收集数据生成正则化参数")
+    else:
+        print(f"  ✓ 正则化参数有效")
+    print("="*60)
+    print("环境重置完成，开始训练循环！\n")
 
     enable_guide = True
 
@@ -739,11 +757,55 @@ if __name__ == "__main__":
             # 只对结束的环境进行收集，记录这个回合的完整信息
             for idx, (term, trunc) in enumerate(zip(terminations, truncations)):
                 if term or trunc:  # 当环境终止时
-                    # 记录产出吨数，此处的代码是有问题的
-                    # produced_tons 数组的结构是： [装载点1产量, 装载点2产量, ..., 装载点5产量, 卸载点1产量, 卸载点2产量, ..., 卸载点5产量]
-                    # 因此，最后5个元素 [-5:] 正是5个卸载点的产出吨数；如果和参数文件不符合则不对
-                    # 这种作者原仓库环境问题有价值吗？算是我们的创新点吗？
-                    produce_tons = sum(np.exp(infos["final_observation"][idx][-5:]) - 1)
+                    # 记录产出吨数
+                    # 在Gymnasium的AsyncVectorEnv中，终止时的信息可能在不同位置
+                    produce_tons = 0.0
+                    
+                    # 方案1: 从_final_info获取（需要检查是否是字典）
+                    if "_final_info" in infos:
+                        final_info_list = infos["_final_info"]
+                        if idx < len(final_info_list):
+                            final_info = final_info_list[idx]
+                            # 检查是否是字典类型
+                            if isinstance(final_info, dict):
+                                produce_tons = float(final_info.get("produce_tons", 0))
+                    
+                    # 方案2: 从_final_observation提取
+                    if produce_tons == 0.0 and "_final_observation" in infos:
+                        final_obs_list = infos["_final_observation"]
+                        if idx < len(final_obs_list) and final_obs_list[idx] is not None:
+                            try:
+                                final_obs = final_obs_list[idx]
+                                if hasattr(final_obs, '__len__') and len(final_obs) == 474:
+                                    produce_tons = float(sum(np.exp(final_obs[189:194]) - 1))
+                                elif hasattr(final_obs, '__len__'):
+                                    produce_tons = float(sum(np.exp(final_obs[-5:]) - 1))
+                            except:
+                                pass
+                    
+                    # 方案3: 从普通infos获取
+                    if produce_tons == 0.0 and "produce_tons" in infos:
+                        try:
+                            produce_tons_value = infos["produce_tons"]
+                            if isinstance(produce_tons_value, (np.ndarray, list)) and len(produce_tons_value) > idx:
+                                produce_tons = float(produce_tons_value[idx])
+                            elif not isinstance(produce_tons_value, (np.ndarray, list)):
+                                produce_tons = float(produce_tons_value)
+                        except:
+                            pass
+                    
+                    # 方案4: 从final_observation提取（旧版本兼容）
+                    if produce_tons == 0.0 and "final_observation" in infos:
+                        try:
+                            if infos["final_observation"][idx] is not None:
+                                final_obs = infos["final_observation"][idx]
+                                if hasattr(final_obs, '__len__') and len(final_obs) == 474:
+                                    produce_tons = float(sum(np.exp(final_obs[189:194]) - 1))
+                                elif hasattr(final_obs, '__len__'):
+                                    produce_tons = float(sum(np.exp(final_obs[-5:]) - 1))
+                        except:
+                            pass
+                    
                     envs.episode_produce_tons.append(produce_tons)
                     
                     # 获取原始奖励和正则化奖励

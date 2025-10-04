@@ -52,8 +52,17 @@ class DataCollector:
         self.all_rewards = []  # 添加rewards列表用于存储所有奖励值
         
         # 根据配置设置观察维度
-        self.obs_dim = 384 if use_enhanced_observation else 194
-        print(f"数据收集器配置: 使用{'384维增强观察' if use_enhanced_observation else '194维基础观察'}")
+        # 增强观察: 194基础 + 70辆车*4维 = 474维
+        if use_enhanced_observation:
+            # 动态计算车辆数
+            with open(env_config, 'r') as f:
+                config = json.load(f)
+            total_trucks = sum(t['count'] for t in config['charging_site']['trucks'])
+            other_trucks_dim = (total_trucks - 1) * 4
+            self.obs_dim = 194 + other_trucks_dim
+        else:
+            self.obs_dim = 194
+        print(f"数据收集器配置: 使用{self.obs_dim}维{'增强观察' if use_enhanced_observation else '基础观察'}")
         
         # 读取配置文件以获取所有调度器
         with open(env_config, 'r') as f:
@@ -255,7 +264,7 @@ if __name__ == "__main__":
     parser.add_argument("--env_id", type=str, default="mine/Mine-v1-dense",
                         help="环境ID")
     parser.add_argument("--use_enhanced_observation", action="store_true", default=True,
-                        help="是否使用384维增强观察（默认True）")
+                        help="是否使用增强观察（跟踪所有车辆，默认True）")
     parser.add_argument("--use_basic_observation", dest="use_enhanced_observation", action="store_false",
                         help="使用194维基础观察")
 

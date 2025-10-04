@@ -20,7 +20,7 @@ class PPODispatcher(BaseDispatcher):
         
         # 先设置必要的属性
         self.use_enhanced_observation = use_enhanced_observation
-        self.max_sim_time = 240
+        self.max_sim_time = 480
         
         # 如果指定了模型路径，使用指定的模型
         if model_path is not None:
@@ -109,13 +109,23 @@ class PPODispatcher(BaseDispatcher):
         # 设置mine_config路径
         self.args.mine_config = str(project_root / "openmines" / "src" / "conf" / "north_pit_mine.json")
         
-        # 查找正则化参数文件 - 首先检查项目根目录
+        # 查找正则化参数文件 - 根据观察维度选择合适的文件
         norm_path = None
-        root_norm_file = project_root / "normalization_params.json"
-        if root_norm_file.exists():
-            norm_path = str(root_norm_file)
+        if self.use_enhanced_observation:
+            # 474维增强观察：优先查找474维正则化文件
+            enhanced_norm_file = project_root / "normalization_params_474.json"
+            if enhanced_norm_file.exists():
+                norm_path = str(enhanced_norm_file)
+                print(f"使用474维增强观察正则化参数: {norm_path}")
         else:
-            # 如果根目录没有，再检查datasets目录
+            # 194维基础观察：使用原有的194维正则化文件
+            root_norm_file = project_root / "normalization_params.json"
+            if root_norm_file.exists():
+                norm_path = str(root_norm_file)
+                print(f"使用194维基础观察正则化参数: {norm_path}")
+        
+        # 如果没有找到对应维度的文件，再检查datasets目录
+        if norm_path is None:
             datasets_dir = project_root / "datasets"
             if datasets_dir.exists():
                 for dataset_folder in datasets_dir.iterdir():
@@ -135,7 +145,7 @@ class PPODispatcher(BaseDispatcher):
                 self.single_observation_space = type('MockSpace', (), {'shape': (obs_dim,)})()
         
         # 根据use_enhanced_observation设置正确的观察维度
-        obs_dim = 384 if self.use_enhanced_observation else 194
+        obs_dim = 474 if self.use_enhanced_observation else 194
         mock_env = MockEnv(obs_dim)
         
         # 创建Agent时传入mock环境

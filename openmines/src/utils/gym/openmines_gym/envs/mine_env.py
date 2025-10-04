@@ -90,9 +90,9 @@ class GymMineEnv(gym.Env):
         if use_enhanced_observation:
             # 计算实际的车辆数量
             total_trucks = calculate_total_trucks(self.config)
-            # 基础154维 + (总车辆数-1) × 4维每车（极简特征）
+            # 基础194维 + (总车辆数-1) × 4维每车（极简特征）
             other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
-            obs_dim = 154 + other_trucks_dim
+            obs_dim = 194 + other_trucks_dim
             print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
             obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
@@ -205,9 +205,9 @@ class ThreadMineEnv(gym.Env):
         if use_enhanced_observation:
             # 计算实际的车辆数量
             total_trucks = calculate_total_trucks(self.config)
-            # 基础154维 + (总车辆数-1) × 4维每车（极简特征）
+            # 基础194维 + (总车辆数-1) × 4维每车（极简特征）
             other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
-            obs_dim = 154 + other_trucks_dim
+            obs_dim = 194 + other_trucks_dim
             print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
             obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
