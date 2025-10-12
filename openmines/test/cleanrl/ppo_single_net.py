@@ -65,7 +65,7 @@ class Args:
     max_grad_norm: float = 0.363605168165705
 
     # 其余保持不变
-    num_envs: int = 4  # 减少到4个环境进行测试
+    num_envs: int = 8  # 减少到4个环境进行测试
     num_steps: int = 1400
     anneal_lr: bool = True
     norm_adv: bool = True

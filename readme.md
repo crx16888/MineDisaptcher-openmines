@@ -7,12 +7,13 @@
 ```bash  
 python openmines\src\utils\rl_data_collector\dqn_collector.py --env_config openmines\src\conf\north_pit_mine.json --episodes 50 --max_steps 2000 --env_id mine/Mine-v1 --use_enhanced_observation # 收集满足维度的正则化参数（如474维的）
 # 放置到根目录下命名为normalization_params_474.json
-python openmines/test/cleanrl/ppo_single_net.py --use_enhanced_observation=True
+python openmines/test/cleanrl/ppo_single_net.py --use-enhanced-observation
 ```
 
 ```bash  
 查看训练曲线
 tensorboard --logdir /home/chengrongxian/git/MineDisaptcher-openmines/runs --bind_all
+tensorboard --logdir runs/ --port 6006
 ```
 
 2. 实验
@@ -26,9 +27,11 @@ openmines run -f C:\Users\95718\Desktop\vscode\MineDisaptcher-openmines\openmine
 原作者仓库：https://github.com/370025263/openmines  
 本人仓库：  
 ```bash
-git add .
-git commit -m "你的提交说明"
-git push origin master
+git status          # 检查，尤其检查.gitignore有没有包含大文件
+git add .           # 添加
+git commit -m "更新描述"  # 提交
+git pull origin master    # 同步
+git push origin master    # 推送
 ```
 
 4. 服务器切换

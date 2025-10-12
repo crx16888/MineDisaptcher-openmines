@@ -14,13 +14,21 @@ from openmines.src.truck import Truck
 from openmines.src.dispatch_algorithms.rl_dispatch import RLDispatcher, ObservationConfig
 
 class PPODispatcher(BaseDispatcher):
-    def __init__(self, model_path: Optional[str] = None, use_enhanced_observation: bool = False):
+    def __init__(self, model_path: Optional[str] = None, use_enhanced_observation: bool = True):
         super().__init__()
         self.name = "PPODispatcher"
         
         # 先设置必要的属性
         self.use_enhanced_observation = use_enhanced_observation
         self.max_sim_time = 480
+        
+        # 创建观察配置（必须在load_rl_model之前，因为需要用于获取观察）
+        if use_enhanced_observation:
+            observation_config = ObservationConfig.create_enhanced_config()
+        else:
+            observation_config = ObservationConfig.create_basic_config()
+        
+        self.rl_dispatcher_helper = RLDispatcher("ShortestTripDispatcher", reward_mode="dense", observation_config=observation_config)
         
         # 如果指定了模型路径，使用指定的模型
         if model_path is not None:
@@ -32,14 +40,6 @@ class PPODispatcher(BaseDispatcher):
         
         self.device = self._get_device()
         self.load_rl_model(self.model_path)
-        
-        # 创建观察配置
-        if use_enhanced_observation:
-            observation_config = ObservationConfig.create_enhanced_config()
-        else:
-            observation_config = ObservationConfig.create_basic_config()
-        
-        self.rl_dispatcher_helper = RLDispatcher("ShortestTripDispatcher", reward_mode="dense", observation_config=observation_config)
 
     def _find_latest_best_model(self):
         """自动查找最新的最佳模型文件"""
@@ -51,34 +51,43 @@ class PPODispatcher(BaseDispatcher):
         if not checkpoints_base_dir.exists():
             raise FileNotFoundError(f"Checkpoints directory not found: {checkpoints_base_dir}")
         
-        # 查找所有可能包含模型的目录
+        # 查找所有可能包含模型的目录，按时间戳排序（目录名中的t后面的数字）
         model_dirs = []
         for item in checkpoints_base_dir.iterdir():
             if item.is_dir() and ('mine' in item.name.lower() or 'ppo' in item.name.lower()):
                 model_dirs.append(item)
         
-        # 查找所有model_开头的.pt文件（实际文件名格式）
+        # 按目录名中的时间戳排序（优先选择最新训练的模型）
+        try:
+            model_dirs.sort(key=lambda x: int(x.name.split('_t')[-1]) if '_t' in x.name else 0, reverse=True)
+        except (IndexError, ValueError):
+            # 如果无法按时间戳排序，按目录修改时间排序
+            model_dirs.sort(key=lambda x: os.path.getmtime(str(x)), reverse=True)
+        
+        # 从最新的目录开始查找最佳模型
         model_files = []
         for model_dir in model_dirs:
+            dir_models = []
             for root, dirs, files in os.walk(str(model_dir)):
                 for file in files:
                     if file.startswith('model_') and file.endswith('.pt'):
-                        model_files.append(os.path.join(root, file))
+                        dir_models.append(os.path.join(root, file))
+            
+            # 如果该目录有模型，按吨数排序选择最佳的
+            if dir_models:
+                try:
+                    dir_models.sort(key=lambda x: float(x.split('tons')[1].split('_')[0]), reverse=True)
+                    best_model = dir_models[0]
+                    print(f"自动找到训练时性能最好的模型: {best_model}")
+                    return best_model
+                except (IndexError, ValueError):
+                    # 如果无法按吨数排序，选择最新的文件
+                    dir_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    best_model = dir_models[0]
+                    print(f"自动找到最新的模型: {best_model}")
+                    return best_model
         
-        if not model_files:
-            raise FileNotFoundError(f"No model files found in any checkpoints subdirectory: {checkpoints_base_dir}")
-        
-        # 按训练时的吨数排序，选择性能最好的
-        try:
-            model_files.sort(key=lambda x: float(x.split('tons')[1].split('_')[0]), reverse=True)
-            best_model = model_files[0]
-        except (IndexError, ValueError) as e:
-            # 如果无法按吨数排序，就按文件修改时间排序，选择最新的
-            model_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            best_model = model_files[0]
-        
-        print(f"自动找到训练时性能最好的模型: {best_model}")
-        return best_model
+        raise FileNotFoundError(f"No model files found in any checkpoints subdirectory: {checkpoints_base_dir}")
 
     def _get_device(self):
         """
@@ -206,9 +215,12 @@ class PPODispatcher(BaseDispatcher):
 
     def _get_raw_observation(self, truck: Truck, mine: Mine):
         """
-        获取原始的、未经预处理的观察值，直接复用 RLDispatcher 中的 _get_observation 方法
+        获取原始的、未经预处理的观察值，根据配置选择基础或增强观察
         """
-        return self.rl_dispatcher_helper._get_observation(truck, mine)
+        if self.use_enhanced_observation:
+            return self.rl_dispatcher_helper._get_enhanced_observation(truck, mine)
+        else:
+            return self.rl_dispatcher_helper._get_observation(truck, mine)
 
 # Example usage (for testing - you'd integrate this into your simulation):
 if __name__ == "__main__":
