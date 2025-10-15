@@ -86,16 +86,16 @@ class GymMineEnv(gym.Env):
         self.action_space = spaces.Discrete(max_choices)
         road_n = self.load_site_n * self.dump_site_n * 2 + self.load_site_n
         site_n = self.load_site_n + self.dump_site_n
-        # 观察空间：根据配置动态计算维度
+        # 观察空间：根据配置动态计算维度（预处理后的实际维度）
         if use_enhanced_observation:
             # 计算实际的车辆数量
             total_trucks = calculate_total_trucks(self.config)
-            # 基础194维 + (总车辆数-1) × 4维每车（极简特征）
+            # 预处理后：基础96维 + (总车辆数-1) × 4维每车
             other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
-            obs_dim = 194 + other_trucks_dim
+            obs_dim = 96 + other_trucks_dim  # 实际预处理后的维度
             print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
-            obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
+            obs_dim = 96  # 基础观察预处理后的实际维度
             
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(obs_dim,), dtype=np.float32)
 
@@ -153,7 +153,6 @@ class GymMineEnv(gym.Env):
 
         # 预处理观察（自动选择处理函数）
         processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
-
         return processed_obs, reward, terminated, truncated, info
 
     def close(self):
@@ -201,16 +200,16 @@ class ThreadMineEnv(gym.Env):
         )
         self.action_space = spaces.Discrete(max_choices)
 
-        # 观察空间：根据配置动态计算维度
+        # 观察空间：根据配置动态计算维度（预处理后的实际维度）
         if use_enhanced_observation:
             # 计算实际的车辆数量
             total_trucks = calculate_total_trucks(self.config)
-            # 基础194维 + (总车辆数-1) × 4维每车（极简特征）
+            # 预处理后：基础96维 + (总车辆数-1) × 4维每车
             other_trucks_dim = (total_trucks - 1) * 4  # 减1是因为不包括当前车辆
-            obs_dim = 194 + other_trucks_dim
+            obs_dim = 96 + other_trucks_dim  # 实际预处理后的维度
             print(f"增强观察模式: 跟踪{total_trucks-1}辆其他车辆，每辆车4维特征，总维度{obs_dim}")
         else:
-            obs_dim = 194  # 基础观察（实际约154维，但保持兼容）
+            obs_dim = 96  # 基础观察预处理后的实际维度
             
         self.observation_space = spaces.Box(
             low=0,
@@ -311,6 +310,7 @@ class ThreadMineEnv(gym.Env):
         observation = out["ob"]
         info = out["info"]
 
+        # 预处理观察（自动选择处理函数）
         processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
         return processed_obs, info
 
@@ -329,7 +329,6 @@ class ThreadMineEnv(gym.Env):
 
         # 预处理观察（自动选择处理函数）
         processed_obs = preprocess_observation_auto(observation, self.max_sim_time)
-
         return processed_obs, reward, terminated, truncated, info
 
     def close(self):

@@ -5,10 +5,17 @@
 需要注意这里分为初始观察和增强观察。初始观察基本沿用原作者送入ppo网络的状态向量，增强观察是我修改以后的。需要修改不同的配置代码才能进行不同的训练。  
 
 ```bash  
-python openmines\src\utils\rl_data_collector\dqn_collector.py --env_config openmines\src\conf\north_pit_mine.json --episodes 50 --max_steps 2000 --env_id mine/Mine-v1 --use_enhanced_observation # 收集满足维度的正则化参数（如474维的）
-# 放置到根目录下命名为normalization_params_474.json
-python openmines/test/cleanrl/ppo_single_net.py --use-enhanced-observation
+python openmines\src\utils\rl_data_collector\dqn_collector.py --env_config openmines\src\conf\north_pit_mine_short.json --episodes 50 --max_steps 2000 --env_id mine/Mine-v1 --use_enhanced_observation
+# 收集满足维度的正则化参数
 ```
+
+```bash  
+# 放置到根目录下命名为normalization_params.json后
+python openmines/test/cleanrl/ppo_single_net.py --use-enhanced-observation
+
+python openmines/test/cleanrl/ppo_single_net.py --mine-config openmines/src/conf/north_pit_mine_short.json
+```
+
 
 ```bash  
 查看训练曲线

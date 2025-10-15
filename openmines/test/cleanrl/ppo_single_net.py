@@ -296,7 +296,12 @@ class CheckpointManager:
             'optimizer_state_dict': optimizer.state_dict(),
             'reward': reward,
             'args': self.args,
-            'info': additional_info or {}
+            'info': additional_info or {},
+            'metadata': {
+                'obs_dim': agent.obs_shape,
+                'mine_config': self.args.mine_config,
+                'use_enhanced_observation': self.args.use_enhanced_observation,
+            }
         }
 
         # 获取产出吨数和步数信息
@@ -531,7 +536,22 @@ if __name__ == "__main__":
     args.minibatch_size = args.batch_size // args.num_minibatches 
     args.num_iterations = args.total_timesteps // args.batch_size #计算完成总训练步数需要的迭代次数
 
-    run_name = f"Mine-v1_ppo_s{args.seed}_t{int(time.time())}"
+    # 从配置文件中提取关键信息用于命名
+    import json
+    import pathlib
+    from openmines.src.utils.gym.openmines_gym.envs.mine_env import calculate_total_trucks
+    
+    config_path = pathlib.Path(args.mine_config)
+    config_name = config_path.stem  # 获取配置文件名（不含扩展名）
+    
+    with open(args.mine_config, 'r') as f:
+        config = json.load(f)
+    
+    total_trucks = calculate_total_trucks(config)
+    obs_mode = "enh" if args.use_enhanced_observation else "bas"
+    obs_dim = 194 + (total_trucks - 1) * 4 if args.use_enhanced_observation else 194
+    
+    run_name = f"Mine-v1_ppo_{config_name}_{total_trucks}t_{obs_mode}{obs_dim}d_s{args.seed}_t{int(time.time())}"
 
     if args.track:
         import wandb
@@ -592,6 +612,17 @@ if __name__ == "__main__":
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     checkpoint_manager = CheckpointManager(args, run_name)
+    
+    # 保存训练配置快照到checkpoint目录
+    import shutil
+    config_snapshot = os.path.join(checkpoint_manager.checkpoint_dir, 'training_config.json')
+    shutil.copy(args.mine_config, config_snapshot)
+    
+    # 保存模型信息摘要
+    info_file = os.path.join(checkpoint_manager.checkpoint_dir, 'model_info.txt')
+    with open(info_file, 'w', encoding='utf-8') as f:
+        f.write(f"配置: {config_name} | 车辆: {total_trucks}辆 | 观察: {obs_mode}_{obs_dim}维 | 种子: {args.seed}\n")
+    
     guide_decay = GuidanceDecay(
         initial_value=args.guide_initial_value,
         final_value=args.guide_final_value,
@@ -601,13 +632,13 @@ if __name__ == "__main__":
 
     start_iteration = 0
     best_reward = float('-inf')
+    global_step = 0
+    start_time = time.time()
+    
     if args.checkpoint_path:
         start_iteration, best_reward = checkpoint_manager.load_checkpoint(
             agent, optimizer, args.checkpoint_path
         )
-        # 从checkpoint中恢复global_step
-        global_step = checkpoint['info'].get('global_step', 0)
-        start_time = time.time() - checkpoint['info'].get('time_elapsed', 0)
 
     obs_shape = agent.obs_shape
     obs = torch.zeros((args.num_steps, args.num_envs, obs_shape), device=device)
@@ -619,8 +650,7 @@ if __name__ == "__main__":
     dones = torch.zeros((args.num_steps, args.num_envs), device=device)
     values = torch.zeros((args.num_steps, args.num_envs), device=device)
 
-    global_step = 0
-    start_time = time.time()
+    # global_step 和 start_time 已在上面初始化
     latest_produce_tons = 0.0
 
     print(f"正在重置 {args.num_envs} 个环境...")

@@ -10,6 +10,10 @@ import pandas as pd
 from multiprocessing import Queue
 import argparse
 from openmines.src.utils.feature_processing import preprocess_observation_auto
+import pathlib
+
+# 导入环境以注册到gymnasium
+import openmines.src.utils.gym.openmines_gym
 
 # 这个脚本用于在不同调度器（dispatcher）配置下运行自定义 gym 环境（openmines 的 Mine 环境）若干回合，
 # 从 environment 的 info（包含专家建议动作 sug_action 等）收集状态、动作、奖励与若干元信息，
@@ -51,24 +55,28 @@ class DataCollector:
         self.all_states = []
         self.all_rewards = []  # 添加rewards列表用于存储所有奖励值
         
-        # 根据配置设置观察维度
-        # 增强观察: 194基础 + 70辆车*4维 = 474维
+        # 读取配置文件
+        with open(env_config, 'r') as f:
+            self.config = json.load(f)
+        
+        # 根据配置设置观察维度（预处理后的实际维度）
+        # 增强观察: 96基础维度 + (车辆数-1)*4维
         if use_enhanced_observation:
             # 动态计算车辆数
-            with open(env_config, 'r') as f:
-                config = json.load(f)
-            total_trucks = sum(t['count'] for t in config['charging_site']['trucks'])
-            other_trucks_dim = (total_trucks - 1) * 4
-            self.obs_dim = 194 + other_trucks_dim
+            self.total_trucks = sum(t['count'] for t in self.config['charging_site']['trucks'])
+            other_trucks_dim = (self.total_trucks - 1) * 4
+            self.obs_dim = 96 + other_trucks_dim  # 预处理后的实际维度
         else:
-            self.obs_dim = 194
-        print(f"数据收集器配置: 使用{self.obs_dim}维{'增强观察' if use_enhanced_observation else '基础观察'}")
+            self.total_trucks = sum(t['count'] for t in self.config['charging_site']['trucks'])
+            self.obs_dim = 96  # 预处理后的实际维度
         
-        # 读取配置文件以获取所有调度器
-        with open(env_config, 'r') as f:
-            config = json.load(f)
-        self.dispatchers = config['dispatcher']['type']
-        self.sim_time = config['sim_time']  # 获取模拟时间
+        # 获取配置文件名（不含路径和扩展名）
+        self.config_name = pathlib.Path(env_config).stem
+        
+        print(f"数据收集器配置: {self.config_name} | {self.total_trucks}辆车 | {self.obs_dim}维{'增强观察' if use_enhanced_observation else '基础观察'}")
+        
+        self.dispatchers = self.config['dispatcher']['type']
+        self.sim_time = self.config['sim_time']  # 获取模拟时间
         
         # 生成唯一的数据集ID
         self.run_id = self._generate_run_id()
@@ -121,13 +129,21 @@ class DataCollector:
                     for step in range(self.max_steps):
                         expert_action = info.get("sug_action", 0)  # 使用info中的建议动作
                         
-                        # 提取特征
+                        # 直接使用原始观察数据（不预处理）
+                        # PPO训练时会在Agent内部进行归一化处理
                         if isinstance(observation, dict):
-                            # 如果是字典格式，使用preprocess_observation函数
-                            state = self.preprocess_features(observation)
+                            # 如果是字典格式，提取state
+                            state = observation.get('state', observation)
+                            if isinstance(state, dict):
+                                # 如果state还是字典，尝试提取observation
+                                state = state.get('observation', state)
                         else:
                             # 如果是数组格式，直接使用
                             state = observation
+                        
+                        # 确保state是numpy数组
+                        if not isinstance(state, np.ndarray):
+                            state = np.array(state)
                         
                         next_observation, reward, done, truncated, info = env.step(expert_action)
                         self.all_rewards.append(reward)  # 收集reward
@@ -230,12 +246,41 @@ class DataCollector:
             "feature_dims": len(state_mean),
             "total_samples": total_samples,
             "dispatchers": self.dispatchers,
-            "env_id": self.env_id
+            "env_id": self.env_id,
+            # 添加配置元数据
+            "config_name": self.config_name,
+            "total_trucks": self.total_trucks,
+            "obs_dim": self.obs_dim,
+            "use_enhanced_observation": self.use_enhanced_observation,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
+        # 1. 保存到数据集目录
         params_path = os.path.join(self.output_dir, "normalization_params.json")
         with open(params_path, 'w') as f:
             json.dump(normalization_params, f, indent=4, cls=NumpyEncoder)
+        
+        # 2. 保存到项目根目录，文件名包含维度信息
+        obs_mode = "enh" if self.use_enhanced_observation else "bas"
+        root_params_filename = f"normalization_params_{self.config_name}_{self.total_trucks}t_{obs_mode}{self.obs_dim}d.json"
+        root_params_path = pathlib.Path.cwd() / root_params_filename
+        with open(root_params_path, 'w') as f:
+            json.dump(normalization_params, f, indent=4, cls=NumpyEncoder)
+        print(f"\n正则化参数已保存:")
+        print(f"  数据集目录: {params_path}")
+        print(f"  项目根目录: {root_params_path}")
+        
+        # 3. 同时保存一个通用名称的文件（用于默认使用）
+        default_params_path = pathlib.Path.cwd() / "normalization_params.json"
+        with open(default_params_path, 'w') as f:
+            json.dump(normalization_params, f, indent=4, cls=NumpyEncoder)
+        print(f"  默认文件: {default_params_path}")
+        
+        # 4. 复制配置文件到数据集目录
+        import shutil
+        config_copy_path = os.path.join(self.output_dir, "training_config.json")
+        shutil.copy(self.env_config, config_copy_path)
+        print(f"  配置文件副本: {config_copy_path}")
         
         print(f"\n数据收集完成!")
         print(f"总样本数: {total_samples}")

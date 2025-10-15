@@ -9,7 +9,7 @@
     "position": [0, 0],
     "trucks": [
       {"type": "OfficalTruck", "count": 9, "capacity": 77, "speed": 25},
-      {"type": "CLTruck", "count": 29, "capacity": 35, "speed": 25},
+      {"type": "CLTruck", "count": 29, "capacity": 55, "speed": 25},
       {"type": "XHTruck", "count": 33, "capacity": 55, "speed": 25}
     ]
   },

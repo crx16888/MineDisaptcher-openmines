@@ -9,9 +9,9 @@
     "name": "North Open-pit Mine Charging Station",
     "position": [0, 0],
     "trucks": [
-      {"type": "Fuel Card", "count": 1, "capacity": 30, "speed": 25},
-      {"type": "Electric Card", "count": 1, "capacity": 120, "speed": 10},
-      {"type": "Truck", "count": 1, "capacity": 50, "speed": 25}
+      {"type": "Fuel Card", "count": 5, "capacity": 30, "speed": 25},
+      {"type": "Electric Card", "count": 5, "capacity": 120, "speed": 10},
+      {"type": "Truck", "count": 5, "capacity": 50, "speed": 25}
     ]
   },
   "load_sites": [
